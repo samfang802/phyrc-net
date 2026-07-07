@@ -1,0 +1,65 @@
+<columnTests>
+    <columnTest id="PEER-SPD-394" version="1">
+        <specimen>
+            <name>Chai, Priestley, and Seible 1991, Test 3</name>
+            <type>Spiral</type>
+            <comments>Retrofitted columns were tested also. Unknown concrete cover</comments>
+            <reference> 
+Chai, Yuk; Priestley, M.; and Seible, Frieder; "Seismic Retrofit of Circular Bridge Columns for Enhanced Flexural Performance," ACI Structural Journal, V88., No.5, September-October 1991, pp. 572-584.</reference>
+        </specimen>
+        <adminInfo>
+            <submissionDate> </submissionDate>
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">32.6</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">351.6</yieldStress>
+            </transverseSteel>
+            <longitudinalSteel>
+                <yieldStress units="MPa">315.1</yieldStress>
+                <strength units="MPa">497.8</strength>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <diameter units="mm">609.6</diameter>
+            <crossSection>Circular</crossSection>
+            <lInflection units="mm">3,657</lInflection>
+            <lMeasured units="mm">3,657</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">1,779</axialLoad>
+            <PDCode>P Ram rotation decreases V</PDCode>
+            <lBottom>480</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">19</diameter>
+            <numberOfBars>26</numberOfBars>
+            <reinforcementRatio>0.0254</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <diameterSpiral>6.4</diameterSpiral>
+            <hoopSpacing units="mm">127</hoopSpacing>
+            <coverToCenter units="mm">20</coverToCenter>
+            <volTransReinfRatio>0.17</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure</failureType>
+        <damage>
+            <crushing units="mm">0</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/circol/txfiles/chait3.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

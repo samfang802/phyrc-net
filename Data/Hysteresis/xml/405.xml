@@ -1,0 +1,65 @@
+<columnTests>
+    <columnTest id="PEER-SPD-405" version="1">
+        <specimen>
+            <name>Kowalsky and Moyer, 2001, 3</name>
+            <type>Spiral</type>
+            <comments/>
+            <reference> 
+Moyer, M.J. and Kowalsky, M.J., "Influence of tension strain on buckling of reinforcement in RC bridge columns." ACI Structural Journal, 2002.</reference>
+        </specimen>
+        <adminInfo>
+            <submissionDate> </submissionDate>
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">31.7</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">434.4</yieldStress>
+            </transverseSteel>
+            <longitudinalSteel>
+                <yieldStress units="MPa">565.4</yieldStress>
+                <strength units="MPa">696.4</strength>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <diameter units="mm">457.2</diameter>
+            <crossSection>Octagonal</crossSection>
+            <lInflection units="mm">2,438.4</lInflection>
+            <lMeasured units="mm">2,438.4</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">231.3</axialLoad>
+            <PDCode>Feff provided</PDCode>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">19</diameter>
+            <numberOfBars>12</numberOfBars>
+            <reinforcementRatio>0.0198</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <diameterSpiral>9.5</diameterSpiral>
+            <hoopSpacing units="mm">76.2</hoopSpacing>
+            <coverToCenter units="mm">12.7</coverToCenter>
+            <volTransReinfRatio>0.92</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure</failureType>
+        <damage>
+            <crushing units="mm">0</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/circol/txfiles/kow01no3.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

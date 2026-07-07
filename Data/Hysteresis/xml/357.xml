@@ -1,0 +1,66 @@
+<columnTests>
+    <columnTest id="PEER-SPD-357" version="1">
+        <specimen>
+            <name>Benzoni and Priestley 1994, NR1</name>
+            <type>Spiral</type>
+            <comments/>
+            <reference> 
+Priestley, M.J.Nigel; Benzoni, Gianmario, Seismic Performance of Circular Columns with Low Longitudinal Reinforcement Ratios, ACI Structural Journal, vol93, No.4, July-August, 1996, pp. 474-485</reference>
+        </specimen>
+        <adminInfo>
+            <submissionDate> </submissionDate>
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">30</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">361</yieldStress>
+            </transverseSteel>
+            <longitudinalSteel>
+                <yieldStress units="MPa">462</yieldStress>
+                <strength units="MPa">0</strength>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <diameter units="mm">610</diameter>
+            <crossSection>Circular</crossSection>
+            <lInflection units="mm">914.5</lInflection>
+            <lMeasured units="mm">914.5</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">503</axialLoad>
+            <PDCode>Feff provided</PDCode>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">12.7</diameter>
+            <numberOfBars>12</numberOfBars>
+            <reinforcementRatio>0.0052</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <diameterSpiral>6.4</diameterSpiral>
+            <hoopSpacing units="mm">76.2</hoopSpacing>
+            <coverToCenter units="mm">15.9</coverToCenter>
+            <volTransReinfRatio>0.28</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure-Shear</failureType>
+        <damage>
+            <crushing units="mm">14.4</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">57.6</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">57.6</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="graph" description="Force-Displacement Hysteresis">http://depts.washington.edu/columdat/circol/images/benz94u1.jpeg</link>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/circol/txfiles/benz94u1.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

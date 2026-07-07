@@ -1,0 +1,97 @@
+<columnTests>
+    <columnTest id="PEER-SPD-214" version="1">
+        <specimen>
+            <name>Sezen and Moehle No. 4</name>
+            <type>Rectangular</type>
+            <comments/>
+            <reference> 
+Sezen H.; Moehle, J.P.; "Seismic Behavior of Shear-Critical Reinforced Concrete Building Columns," Seventh U.S. National Conference on Earthquake Engineering, Boston, Massachusetts, July 21-25, 2002</reference>
+        </specimen>
+        <adminInfo>
+            <!-- Generated from audit trail records in the database -->
+            <submissionDate> </submissionDate>
+            <!-- Person who created/last updated this record -->
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <!-- Original data owner and any restrictions on use -->
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">21.8</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">476</yieldStress>
+                <strength units="MPa">724</strength>
+                <grade>414</grade>
+            </transverseSteel>
+            <longitudinalSteel>
+                <grade>414</grade>
+                <corner>
+                    <yieldStress units="MPa">434.4</yieldStress>
+                    <strength units="MPa">645</strength>
+                </corner>
+                <intermediate>
+                    <yieldStress units="MPa">434.4</yieldStress>
+                    <strength units="MPa">645</strength>
+                </intermediate>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <width units="mm">457.2</width>
+            <depth units="mm">457.2</depth>
+            <lInflection units="mm">1,473.2</lInflection>
+            <lMeasured units="mm">1,473.2</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Double Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">667</axialLoad>
+            <PDCode>Shear provided</PDCode>
+            <lTop>0</lTop>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">28.7</diameter>
+            <diameterIntermediate units="mm">28.7</diameterIntermediate>
+            <numberOfBars>8</numberOfBars>
+            <perpendicularToLoad>
+                <clearCover units="mm">65.1</clearCover>
+                <numberIntermediateBars>1</numberIntermediateBars>
+            </perpendicularToLoad>
+            <parallelToLoad>
+                <clearCover units="mm">65.1</clearCover>
+                <numberIntermediateBars>1</numberIntermediateBars>
+            </parallelToLoad>
+            <reinforcementRatio>0.0247</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <type>RD: Rectangular and diagonal ties</type>
+            <numberShearLegs>3.4</numberShearLegs>
+            <closeSpacing>
+                <barDiameter units="mm">9.5</barDiameter>
+                <numberHoopSets>10</numberHoopSets>
+                <hoopSpacing units="mm">304.8</hoopSpacing>
+            </closeSpacing>
+            <!-- If uniform, this section will be missing -->
+            <wideSpacing>
+                <barDiameter units="mm">0</barDiameter>
+                <numberHoopSets>0</numberHoopSets>
+                <hoopSpacing units="mm">0</hoopSpacing>
+            </wideSpacing>
+            <volTransReinfRatio>0.002</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure-Shear</failureType>
+        <damage>
+            <crushing units="mm">0</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">139.7</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/rectcol/txfiles/sezen4.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

@@ -1,0 +1,97 @@
+<columnTests>
+    <columnTest id="PEER-SPD-38" version="1">
+        <specimen>
+            <name>Imai and Yamamoto 1986, No. 1</name>
+            <type>Rectangular</type>
+            <comments>cover scaled from drawing</comments>
+            <reference> 
+Imai, Hiroshi; and Yamamoto, Yoshie, "A Study on Causes of Earthquake Damage of Izumi High School Due to Miyagi-Ken-Oki Earthquake in 1978," Transactions of the Japan Concrete Institute, Vol. 8, 1986, pp. 405-418.</reference>
+        </specimen>
+        <adminInfo>
+            <!-- Generated from audit trail records in the database -->
+            <submissionDate> </submissionDate>
+            <!-- Person who created/last updated this record -->
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <!-- Original data owner and any restrictions on use -->
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">27.1</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">336</yieldStress>
+                <strength units="MPa">0</strength>
+                <grade/>
+            </transverseSteel>
+            <longitudinalSteel>
+                <grade/>
+                <corner>
+                    <yieldStress units="MPa">318</yieldStress>
+                    <strength units="MPa">0</strength>
+                </corner>
+                <intermediate>
+                    <yieldStress units="MPa">318</yieldStress>
+                    <strength units="MPa">0</strength>
+                </intermediate>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <width units="mm">400</width>
+            <depth units="mm">500</depth>
+            <lInflection units="mm">825</lInflection>
+            <lMeasured units="mm">825</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Double Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">392</axialLoad>
+            <PDCode>Not defined in report</PDCode>
+            <lTop>0</lTop>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">22</diameter>
+            <diameterIntermediate units="mm">22</diameterIntermediate>
+            <numberOfBars>14</numberOfBars>
+            <perpendicularToLoad>
+                <clearCover units="mm">37</clearCover>
+                <numberIntermediateBars>3</numberIntermediateBars>
+            </perpendicularToLoad>
+            <parallelToLoad>
+                <clearCover units="mm">37</clearCover>
+                <numberIntermediateBars>2</numberIntermediateBars>
+            </parallelToLoad>
+            <reinforcementRatio>0.0266</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <type>R: Rectangular ties (around perimeter)</type>
+            <numberShearLegs>2</numberShearLegs>
+            <closeSpacing>
+                <barDiameter units="mm">9</barDiameter>
+                <numberHoopSets>9</numberHoopSets>
+                <hoopSpacing units="mm">100</hoopSpacing>
+            </closeSpacing>
+            <!-- If uniform, this section will be missing -->
+            <wideSpacing>
+                <barDiameter units="mm">0</barDiameter>
+                <numberHoopSets>0</numberHoopSets>
+                <hoopSpacing units="mm">0</hoopSpacing>
+            </wideSpacing>
+            <volTransReinfRatio>0.004</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Shear</failureType>
+        <damage>
+            <crushing units="mm">0</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/rectcol/txfiles/imai86.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

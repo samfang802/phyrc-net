@@ -1,0 +1,66 @@
+<columnTests>
+    <columnTest id="PEER-SPD-277" version="1">
+        <specimen>
+            <name>Ang et al. 1985, No. 11</name>
+            <type>Spiral</type>
+            <comments>Flexible base</comments>
+            <reference> 
+Ang Beng Ghee; Priestley, M.J.N.; and Paulay, T., "Seismic Shear Strength of Circular Reinforced Concrete Columns," ACI Structural Journal, January-February 1989, pp. 45-59.</reference>
+        </specimen>
+        <adminInfo>
+            <submissionDate> </submissionDate>
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">29.9</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">372</yieldStress>
+            </transverseSteel>
+            <longitudinalSteel>
+                <yieldStress units="MPa">448</yieldStress>
+                <strength units="MPa">693</strength>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <diameter units="mm">400</diameter>
+            <crossSection>Circular</crossSection>
+            <lInflection units="mm">800</lInflection>
+            <lMeasured units="mm">800</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">1,905</lBeam>
+            <configuration>Cantilever with Flexible Base</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">751</axialLoad>
+            <PDCode>Shear provided</PDCode>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">16</diameter>
+            <numberOfBars>20</numberOfBars>
+            <reinforcementRatio>0.032</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <diameterSpiral>6</diameterSpiral>
+            <hoopSpacing units="mm">60</hoopSpacing>
+            <coverToCenter units="mm">18</coverToCenter>
+            <volTransReinfRatio>0.51</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure-Shear</failureType>
+        <damage>
+            <crushing units="mm">0</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="graph" description="Force-Displacement Hysteresis">http://depts.washington.edu/columdat/circol/images/ang85u11.jpeg</link>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/circol/txfiles/ang85u11.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

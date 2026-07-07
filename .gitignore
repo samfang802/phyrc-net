@@ -1,0 +1,13 @@
+/__pycache__
+*/__pycache__
+*/*/__pycache__
+/results
+/log
+/Sample
+job.sh
+/temp
+/temp_all
+/evaluation
+/notebook
+/generation
+draw.ipynb

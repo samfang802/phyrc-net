@@ -1,0 +1,97 @@
+<columnTests>
+    <columnTest id="PEER-SPD-246" version="1">
+        <specimen>
+            <name>Bechtoula, Kono, Arai and Watanabe, 2002, L1N60</name>
+            <type>Rectangular</type>
+            <comments/>
+            <reference> 
+Arai, Yusaku; Hakim, Bechtoula; Kono, Susumu; Watanabe, Fumio, "Damage Assessment of Reinforced Concrete Columns Under High Axial Loading", Personal Contact, September 2002.</reference>
+        </specimen>
+        <adminInfo>
+            <!-- Generated from audit trail records in the database -->
+            <submissionDate> </submissionDate>
+            <!-- Person who created/last updated this record -->
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <!-- Original data owner and any restrictions on use -->
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">39.2</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">524</yieldStress>
+                <strength units="MPa">673</strength>
+                <grade>-</grade>
+            </transverseSteel>
+            <longitudinalSteel>
+                <grade>-</grade>
+                <corner>
+                    <yieldStress units="MPa">388</yieldStress>
+                    <strength units="MPa">588</strength>
+                </corner>
+                <intermediate>
+                    <yieldStress units="MPa">388</yieldStress>
+                    <strength units="MPa">588</strength>
+                </intermediate>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <width units="mm">600</width>
+            <depth units="mm">600</depth>
+            <lInflection units="mm">1,200</lInflection>
+            <lMeasured units="mm">1,200</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">8,000</axialLoad>
+            <PDCode>Shear provided</PDCode>
+            <lTop>0</lTop>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">25.4</diameter>
+            <diameterIntermediate units="mm">25.4</diameterIntermediate>
+            <numberOfBars>12</numberOfBars>
+            <perpendicularToLoad>
+                <clearCover units="mm">44.5</clearCover>
+                <numberIntermediateBars>2</numberIntermediateBars>
+            </perpendicularToLoad>
+            <parallelToLoad>
+                <clearCover units="mm">44.5</clearCover>
+                <numberIntermediateBars>2</numberIntermediateBars>
+            </parallelToLoad>
+            <reinforcementRatio>0.0169</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <type>RU: Rectangular ties and U-bars</type>
+            <numberShearLegs>4</numberShearLegs>
+            <closeSpacing>
+                <barDiameter units="mm">12.7</barDiameter>
+                <numberHoopSets>0</numberHoopSets>
+                <hoopSpacing units="mm">100</hoopSpacing>
+            </closeSpacing>
+            <!-- If uniform, this section will be missing -->
+            <wideSpacing>
+                <barDiameter units="mm">0</barDiameter>
+                <numberHoopSets>0</numberHoopSets>
+                <hoopSpacing units="mm">0</hoopSpacing>
+            </wideSpacing>
+            <volTransReinfRatio>0</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure</failureType>
+        <damage>
+            <crushing units="mm">0</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/rectcol/txfiles/Bechtoula_Kono_L1N60.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

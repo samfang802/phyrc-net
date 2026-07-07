@@ -1,0 +1,91 @@
+<columnTests>
+    <columnTest id="PEER-SPD-208" version="1">
+        <specimen>
+            <name>Thomsen and Wallace 1994, C3</name>
+            <type>Rectangular</type>
+            <comments/>
+            <reference> 
+Thomsen, John; and Wallace, John, "Lateral Load Behavior of Reinforced Concrete Columns Constructed Using High-Strength Materials," American Concrete Institute, ACI Structural Journal, Vol. 91, No. 5, September-October 1994, pp. 605-615.</reference>
+        </specimen>
+        <adminInfo>
+            <!-- Generated from audit trail records in the database -->
+            <submissionDate> </submissionDate>
+            <!-- Person who created/last updated this record -->
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <!-- Original data owner and any restrictions on use -->
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">81.8</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">1,262</yieldStress>
+                <strength units="MPa">1,448</strength>
+                <grade/>
+            </transverseSteel>
+            <longitudinalSteel>
+                <grade>414</grade>
+                <corner>
+                    <yieldStress units="MPa">475.8</yieldStress>
+                    <strength units="MPa">738</strength>
+                </corner>
+                <intermediate>
+                    <yieldStress units="MPa">475.8</yieldStress>
+                    <strength units="MPa">738</strength>
+                </intermediate>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <width units="mm">152.4</width>
+            <depth units="mm">152.4</depth>
+            <lInflection units="mm">596.9</lInflection>
+            <lMeasured units="mm">596.9</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">380</axialLoad>
+            <PDCode>Feff provided</PDCode>
+            <lTop>0</lTop>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">9.5</diameter>
+            <diameterIntermediate units="mm">9.5</diameterIntermediate>
+            <numberOfBars>8</numberOfBars>
+            <perpendicularToLoad>
+                <clearCover units="mm">11.1</clearCover>
+                <numberIntermediateBars>1</numberIntermediateBars>
+            </perpendicularToLoad>
+            <parallelToLoad>
+                <clearCover units="mm">11.1</clearCover>
+                <numberIntermediateBars>1</numberIntermediateBars>
+            </parallelToLoad>
+            <reinforcementRatio>0.0245</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <type>RD: Rectangular and diagonal ties</type>
+            <numberShearLegs>3.4</numberShearLegs>
+            <closeSpacing>
+                <barDiameter units="mm">3.2</barDiameter>
+                <numberHoopSets>10</numberHoopSets>
+                <hoopSpacing units="mm">25.4</hoopSpacing>
+            </closeSpacing>
+            <volTransReinfRatio>0</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure</failureType>
+        <damage>
+            <crushing units="mm">14.9</crushing>
+            <spalling units="mm">14.9</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/rectcol/txfiles/thom94c3.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

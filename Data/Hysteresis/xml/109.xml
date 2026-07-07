@@ -1,0 +1,91 @@
+<columnTests>
+    <columnTest id="PEER-SPD-109" version="1">
+        <specimen>
+            <name>Galeota et al. 1996, AA1</name>
+            <type>Rectangular</type>
+            <comments/>
+            <reference> 
+Galeota, D.: Giammatteo, M.M.; Marino, R., "Seismic Resistance of High Strength Concrete Columns." Procedings of the Eleventh World Conference on Earthquake Engineering, Disc 3, Paper No. 1390, 1996.</reference>
+        </specimen>
+        <adminInfo>
+            <!-- Generated from audit trail records in the database -->
+            <submissionDate> </submissionDate>
+            <!-- Person who created/last updated this record -->
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <!-- Original data owner and any restrictions on use -->
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">80</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">430</yieldStress>
+                <strength units="MPa">0</strength>
+                <grade/>
+            </transverseSteel>
+            <longitudinalSteel>
+                <grade/>
+                <corner>
+                    <yieldStress units="MPa">430</yieldStress>
+                    <strength units="MPa">0</strength>
+                </corner>
+                <intermediate>
+                    <yieldStress units="MPa">430</yieldStress>
+                    <strength units="MPa">0</strength>
+                </intermediate>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <width units="mm">250</width>
+            <depth units="mm">250</depth>
+            <lInflection units="mm">1,140</lInflection>
+            <lMeasured units="mm">1,140</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Double Ended</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">1,500</axialLoad>
+            <PDCode>Shear provided</PDCode>
+            <lTop>0</lTop>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">10</diameter>
+            <diameterIntermediate units="mm">10</diameterIntermediate>
+            <numberOfBars>12</numberOfBars>
+            <perpendicularToLoad>
+                <clearCover units="mm">30</clearCover>
+                <numberIntermediateBars>2</numberIntermediateBars>
+            </perpendicularToLoad>
+            <parallelToLoad>
+                <clearCover units="mm">30</clearCover>
+                <numberIntermediateBars>2</numberIntermediateBars>
+            </parallelToLoad>
+            <reinforcementRatio>0.0151</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <type>RI: Rectangular and interlocking ties</type>
+            <numberShearLegs>4</numberShearLegs>
+            <closeSpacing>
+                <barDiameter units="mm">8</barDiameter>
+                <numberHoopSets>0</numberHoopSets>
+                <hoopSpacing units="mm">150</hoopSpacing>
+            </closeSpacing>
+            <volTransReinfRatio>0.012</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure</failureType>
+        <damage>
+            <crushing units="mm">0</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/rectcol/txfiles/gal96aa1.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

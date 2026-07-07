@@ -1,0 +1,66 @@
+<columnTests>
+    <columnTest id="PEER-SPD-297" version="1">
+        <specimen>
+            <name>Wong et al. 1990, No. 2</name>
+            <type>Spiral</type>
+            <comments>Axial load reduced after failure</comments>
+            <reference> 
+Wong, Y.L., Paulay, T., and Priestley, M.J.N. (1993). "Response of Circular Reinforced Concrete Columns to Multi-Directional Seismic Attack." ACI Structural Journal, Vol 90, No.2, pp. 180-191.</reference>
+        </specimen>
+        <adminInfo>
+            <submissionDate> </submissionDate>
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">37</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">340</yieldStress>
+            </transverseSteel>
+            <longitudinalSteel>
+                <yieldStress units="MPa">475</yieldStress>
+                <strength units="MPa">625</strength>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <diameter units="mm">400</diameter>
+            <crossSection>Circular</crossSection>
+            <lInflection units="mm">800</lInflection>
+            <lMeasured units="mm">800</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">1,813</axialLoad>
+            <PDCode>Shear provided</PDCode>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">16</diameter>
+            <numberOfBars>20</numberOfBars>
+            <reinforcementRatio>0.032</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <diameterSpiral>6</diameterSpiral>
+            <hoopSpacing units="mm">65</hoopSpacing>
+            <coverToCenter units="mm">18</coverToCenter>
+            <volTransReinfRatio>0.47</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure-Shear</failureType>
+        <damage>
+            <crushing units="mm">0</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="graph" description="Force-Displacement Hysteresis">http://depts.washington.edu/columdat/circol/images/wong90u2.jpeg</link>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/circol/txfiles/wong90u2.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

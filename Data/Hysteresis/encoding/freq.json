@@ -1,0 +1,18 @@
+{
+    "configuration": {
+        "Double Cantilever": 0.385,
+        "Double Ended": 0.313,
+        "Cantilever": 0.302
+    },
+    "transverse_type": {
+        "R: Rectangular ties (around perimeter)": 0.3810,
+        "RI: Rectangular and interlocking ties": 0.2698,
+        "RD: Rectangular and diagonal ties": 0.1508,
+        "RJ: Rectangular ties with J-hooks": 0.1111,
+        "RO: Rectangular and octagonal ties": 0.0437,
+        "RU: Rectangular ties and U-bars": 0.0239,
+        "I: Interlocking ties": 0.0119,
+        "UJ: U-bars with J-hooks": 0.0039,
+        "RIJ: Rectangular and interlocking ties with J-hooks": 0.0039
+    }
+}

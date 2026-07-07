@@ -1,0 +1,97 @@
+<columnTests>
+    <columnTest id="PEER-SPD-13" version="1">
+        <specimen>
+            <name>Watson and Park 1989, No. 5</name>
+            <type>Rectangular</type>
+            <comments/>
+            <reference> 
+Watson, Soesianawati; and Park, R., "Design of Reinforced Concrete Frames of Limited Ductility," Report 89-4, Department of Civil Engineering, University of Canterbury, Christchurch, New Zealand, January 1989, 232 pages.</reference>
+        </specimen>
+        <adminInfo>
+            <!-- Generated from audit trail records in the database -->
+            <submissionDate> </submissionDate>
+            <!-- Person who created/last updated this record -->
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <!-- Original data owner and any restrictions on use -->
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">41</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">372</yieldStress>
+                <strength units="MPa">516</strength>
+                <grade>275</grade>
+            </transverseSteel>
+            <longitudinalSteel>
+                <grade>380</grade>
+                <corner>
+                    <yieldStress units="MPa">474</yieldStress>
+                    <strength units="MPa">633.3</strength>
+                </corner>
+                <intermediate>
+                    <yieldStress units="MPa">474</yieldStress>
+                    <strength units="MPa">633.3</strength>
+                </intermediate>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <width units="mm">400</width>
+            <depth units="mm">400</depth>
+            <lInflection units="mm">1,600</lInflection>
+            <lMeasured units="mm">1,600</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Double Ended</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">3,280</axialLoad>
+            <PDCode>Shear provided</PDCode>
+            <lTop>0</lTop>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">16</diameter>
+            <diameterIntermediate units="mm">16</diameterIntermediate>
+            <numberOfBars>12</numberOfBars>
+            <perpendicularToLoad>
+                <clearCover units="mm">13</clearCover>
+                <numberIntermediateBars>2</numberIntermediateBars>
+            </perpendicularToLoad>
+            <parallelToLoad>
+                <clearCover units="mm">13</clearCover>
+                <numberIntermediateBars>2</numberIntermediateBars>
+            </parallelToLoad>
+            <reinforcementRatio>0.0151</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <type>RO: Rectangular and octagonal ties</type>
+            <numberShearLegs>4</numberShearLegs>
+            <closeSpacing>
+                <barDiameter units="mm">8</barDiameter>
+                <numberHoopSets>8</numberHoopSets>
+                <hoopSpacing units="mm">81</hoopSpacing>
+            </closeSpacing>
+            <!-- If uniform, this section will be missing -->
+            <wideSpacing>
+                <barDiameter units="mm">0</barDiameter>
+                <numberHoopSets>0</numberHoopSets>
+                <hoopSpacing units="mm">0</hoopSpacing>
+            </wideSpacing>
+            <volTransReinfRatio>0.007</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure</failureType>
+        <damage>
+            <crushing units="mm">18.5</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/rectcol/txfiles/wat89u5.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

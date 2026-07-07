@@ -1,0 +1,91 @@
+<columnTests>
+    <columnTest id="PEER-SPD-133" version="1">
+        <specimen>
+            <name>Wehbe et al. 1998, A1</name>
+            <type>Rectangular</type>
+            <comments>Irregular tie configuration #3 cross ties perpendicular to load.</comments>
+            <reference> 
+Wehbe, N., Saiidi, M.S., and Sanders, D,. "Confinement of Rectangular Bridge Columns for Modrate Seismic Areas," National Center for Earthquake Engineering Research (NCEER) Bulletin, Volume 12, Number 1, Spring 1998.</reference>
+        </specimen>
+        <adminInfo>
+            <!-- Generated from audit trail records in the database -->
+            <submissionDate> </submissionDate>
+            <!-- Person who created/last updated this record -->
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <!-- Original data owner and any restrictions on use -->
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">27.2</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">428</yieldStress>
+                <strength units="MPa">738</strength>
+                <grade/>
+            </transverseSteel>
+            <longitudinalSteel>
+                <grade/>
+                <corner>
+                    <yieldStress units="MPa">448</yieldStress>
+                    <strength units="MPa">731</strength>
+                </corner>
+                <intermediate>
+                    <yieldStress units="MPa">448</yieldStress>
+                    <strength units="MPa">731</strength>
+                </intermediate>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <width units="mm">380</width>
+            <depth units="mm">610</depth>
+            <lInflection units="mm">2,335</lInflection>
+            <lMeasured units="mm">2,335</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">615</axialLoad>
+            <PDCode>Feff provided</PDCode>
+            <lTop>0</lTop>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">19.1</diameter>
+            <diameterIntermediate units="mm">19.1</diameterIntermediate>
+            <numberOfBars>18</numberOfBars>
+            <perpendicularToLoad>
+                <clearCover units="mm">28</clearCover>
+                <numberIntermediateBars>2</numberIntermediateBars>
+            </perpendicularToLoad>
+            <parallelToLoad>
+                <clearCover units="mm">28</clearCover>
+                <numberIntermediateBars>5</numberIntermediateBars>
+            </parallelToLoad>
+            <reinforcementRatio>0.0222</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <type>RJ: Rectangular ties with J-hooks</type>
+            <numberShearLegs>4</numberShearLegs>
+            <closeSpacing>
+                <barDiameter units="mm">6</barDiameter>
+                <numberHoopSets>9</numberHoopSets>
+                <hoopSpacing units="mm">110</hoopSpacing>
+            </closeSpacing>
+            <volTransReinfRatio>0.004</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure</failureType>
+        <damage>
+            <crushing units="mm">47</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">122</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">122</spiralFracture>
+            <lossAxial units="mm">163</lossAxial>
+        </damage>
+        <links>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/rectcol/txfiles/wehb98a1.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

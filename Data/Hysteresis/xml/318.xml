@@ -1,0 +1,66 @@
+<columnTests>
+    <columnTest id="PEER-SPD-318" version="1">
+        <specimen>
+            <name>BRI No. 3 (Japan), ws26bs</name>
+            <type>Spiral</type>
+            <comments>square cross-section</comments>
+            <reference> 
+Kenchiku Kenkyu Siryo No. 21, "Aseismic Analysis of Building Structural Members: a List of Experimental Results on Deformation Ability of Reinforced Concrete Columns Under Large Deflection (No.3)," Building Research Institute, Ministry of Construction, Ja</reference>
+        </specimen>
+        <adminInfo>
+            <submissionDate> </submissionDate>
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">31.6</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">386.5</yieldStress>
+            </transverseSteel>
+            <longitudinalSteel>
+                <yieldStress units="MPa">382</yieldStress>
+                <strength units="MPa">0</strength>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <diameter units="mm">250</diameter>
+            <crossSection>Square</crossSection>
+            <lInflection units="mm">500</lInflection>
+            <lMeasured units="mm">500</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Double Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">161</axialLoad>
+            <PDCode>Shear provided</PDCode>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">12.7</diameter>
+            <numberOfBars>8</numberOfBars>
+            <reinforcementRatio>0.0162</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <diameterSpiral>3.9</diameterSpiral>
+            <hoopSpacing units="mm">37</hoopSpacing>
+            <coverToCenter units="mm">37</coverToCenter>
+            <volTransReinfRatio>0.75</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure-Shear</failureType>
+        <damage>
+            <crushing units="mm">0</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="graph" description="Force-Displacement Hysteresis">http://depts.washington.edu/columdat/circol/images/j3ws26bs.jpeg</link>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/circol/txfiles/j3ws26bs.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

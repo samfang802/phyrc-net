@@ -1,0 +1,66 @@
+<columnTests>
+    <columnTest id="PEER-SPD-382" version="1">
+        <specimen>
+            <name>Saatcioglu and Baingo 1999, RC3</name>
+            <type>Spiral</type>
+            <comments/>
+            <reference> 
+Saatcioglu, M.; and Baingo, D, "Circular High-Strength Concrete Columns Under Simulated Seismic Loading." Journal of Structural Engineering. March 1999, pp. 272-280.</reference>
+        </specimen>
+        <adminInfo>
+            <submissionDate> </submissionDate>
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">90</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">1,000</yieldStress>
+            </transverseSteel>
+            <longitudinalSteel>
+                <yieldStress units="MPa">419</yieldStress>
+                <strength units="MPa">0</strength>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <diameter units="mm">250</diameter>
+            <crossSection>Circular</crossSection>
+            <lInflection units="mm">1,645</lInflection>
+            <lMeasured units="mm">1,645</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">1,850</axialLoad>
+            <PDCode>P Ram rotation decreases V</PDCode>
+            <lBottom>600</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">16</diameter>
+            <numberOfBars>8</numberOfBars>
+            <reinforcementRatio>0.0328</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <diameterSpiral>7.5</diameterSpiral>
+            <hoopSpacing units="mm">50</hoopSpacing>
+            <coverToCenter units="mm">13.8</coverToCenter>
+            <volTransReinfRatio>1.54</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure</failureType>
+        <damage>
+            <crushing units="mm">0</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="graph" description="Force-Displacement Hysteresis">http://depts.washington.edu/columdat/circol/images/saatrc3.jpeg</link>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/circol/txfiles/saatrc3.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

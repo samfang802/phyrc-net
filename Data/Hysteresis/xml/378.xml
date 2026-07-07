@@ -1,0 +1,66 @@
+<columnTests>
+    <columnTest id="PEER-SPD-378" version="1">
+        <specimen>
+            <name>Sritharan et al. 1995, B105IC2</name>
+            <type>Spiral</type>
+            <comments/>
+            <reference> 
+Sritharan, S.; Priestley, M.J.N.; Seible F., "Seismic Response of Column/Cap Beam Tee Connections with Cap Beam Prestressing," University of California, San Diego, Structural Systems Research Project, Report No. ssrp-96/09, December 1996</reference>
+        </specimen>
+        <adminInfo>
+            <submissionDate> </submissionDate>
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">34.6</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">431</yieldStress>
+            </transverseSteel>
+            <longitudinalSteel>
+                <yieldStress units="MPa">448</yieldStress>
+                <strength units="MPa">739</strength>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <diameter units="mm">600</diameter>
+            <crossSection>Circular</crossSection>
+            <lInflection units="mm">1,800</lInflection>
+            <lMeasured units="mm">1,800</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">400</axialLoad>
+            <PDCode>Feff provided</PDCode>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">22.2</diameter>
+            <numberOfBars>14</numberOfBars>
+            <reinforcementRatio>0.0192</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <diameterSpiral>9.5</diameterSpiral>
+            <hoopSpacing units="mm">97</hoopSpacing>
+            <coverToCenter units="mm">30.2</coverToCenter>
+            <volTransReinfRatio>0.54</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure</failureType>
+        <damage>
+            <crushing units="mm">0</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="graph" description="Force-Displacement Hysteresis">http://depts.washington.edu/columdat/circol/images/srtic2.jpeg</link>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/circol/txfiles/srtic2.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

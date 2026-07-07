@@ -1,0 +1,97 @@
+<columnTests>
+    <columnTest id="PEER-SPD-32" version="1">
+        <specimen>
+            <name>Ohno and Nishioka 1984, L3</name>
+            <type>Rectangular</type>
+            <comments>cover scaled from drawing</comments>
+            <reference> 
+Ohno, Tomonori; and Nishioka, Takashi, "An Experimental Study on Energy Absorption Capacity of Columns in Reinforced Concrete Structures," Proceedings of the JSCE, Structural Engineering/Earthquake Engineering, Vol. 1, No 2., October 1984, pp. 137-147.</reference>
+        </specimen>
+        <adminInfo>
+            <!-- Generated from audit trail records in the database -->
+            <submissionDate> </submissionDate>
+            <!-- Person who created/last updated this record -->
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <!-- Original data owner and any restrictions on use -->
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">24.8</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">325</yieldStress>
+                <strength units="MPa">0</strength>
+                <grade/>
+            </transverseSteel>
+            <longitudinalSteel>
+                <grade/>
+                <corner>
+                    <yieldStress units="MPa">362</yieldStress>
+                    <strength units="MPa">0</strength>
+                </corner>
+                <intermediate>
+                    <yieldStress units="MPa">362</yieldStress>
+                    <strength units="MPa">0</strength>
+                </intermediate>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <width units="mm">400</width>
+            <depth units="mm">400</depth>
+            <lInflection units="mm">1,600</lInflection>
+            <lMeasured units="mm">1,600</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">127</axialLoad>
+            <PDCode>P Ram rotation increases V</PDCode>
+            <lTop>3,000</lTop>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">19</diameter>
+            <diameterIntermediate units="mm">19</diameterIntermediate>
+            <numberOfBars>8</numberOfBars>
+            <perpendicularToLoad>
+                <clearCover units="mm">31.5</clearCover>
+                <numberIntermediateBars>2</numberIntermediateBars>
+            </perpendicularToLoad>
+            <parallelToLoad>
+                <clearCover units="mm">31.5</clearCover>
+                <numberIntermediateBars>0</numberIntermediateBars>
+            </parallelToLoad>
+            <reinforcementRatio>0.0142</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <type>R: Rectangular ties (around perimeter)</type>
+            <numberShearLegs>2</numberShearLegs>
+            <closeSpacing>
+                <barDiameter units="mm">9</barDiameter>
+                <numberHoopSets>0</numberHoopSets>
+                <hoopSpacing units="mm">100</hoopSpacing>
+            </closeSpacing>
+            <!-- If uniform, this section will be missing -->
+            <wideSpacing>
+                <barDiameter units="mm">0</barDiameter>
+                <numberHoopSets>0</numberHoopSets>
+                <hoopSpacing units="mm">0</hoopSpacing>
+            </wideSpacing>
+            <volTransReinfRatio>0.003</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure</failureType>
+        <damage>
+            <crushing units="mm">0</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/rectcol/txfiles/ohno84l3.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

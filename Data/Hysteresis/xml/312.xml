@@ -1,0 +1,66 @@
+<columnTests>
+    <columnTest id="PEER-SPD-312" version="1">
+        <specimen>
+            <name>NIST, Model N5</name>
+            <type>Spiral</type>
+            <comments/>
+            <reference> 
+Stone, William C.; and Cheok, Geraldine S., Inelastic Behavior of Full-Scale Bridge Columns Subjected to Cyclic Loading, NIST BSS 166, Building Science Series, Center for Building Technology, National Engineering Laboratory, National Institute of Standard</reference>
+        </specimen>
+        <adminInfo>
+            <submissionDate> </submissionDate>
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">24.3</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">441</yieldStress>
+            </transverseSteel>
+            <longitudinalSteel>
+                <yieldStress units="MPa">446</yieldStress>
+                <strength units="MPa">0</strength>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <diameter units="mm">250</diameter>
+            <crossSection>Circular</crossSection>
+            <lInflection units="mm">750</lInflection>
+            <lMeasured units="mm">750</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">239</axialLoad>
+            <PDCode>Shear provided</PDCode>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">7</diameter>
+            <numberOfBars>25</numberOfBars>
+            <reinforcementRatio>0.0196</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <diameterSpiral>3.1</diameterSpiral>
+            <hoopSpacing units="mm">9</hoopSpacing>
+            <coverToCenter units="mm">9.9</coverToCenter>
+            <volTransReinfRatio>1.41</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure</failureType>
+        <damage>
+            <crushing units="mm">19.3</crushing>
+            <spalling units="mm">29</spalling>
+            <buckling units="mm">48.3</buckling>
+            <longBarFracture units="mm">48.3</longBarFracture>
+            <spiralFracture units="mm">48.3</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="graph" description="Force-Displacement Hysteresis">http://depts.washington.edu/columdat/circol/images/modeln5.jpeg</link>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/circol/txfiles/modeln5.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

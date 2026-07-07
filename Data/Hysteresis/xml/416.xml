@@ -1,0 +1,65 @@
+<columnTests>
+    <columnTest id="PEER-SPD-416" version="1">
+        <specimen>
+            <name>McDaniel, 1997, S2</name>
+            <type>Spiral</type>
+            <comments/>
+            <reference> 
+McDaniel, Cole, "Scale Effects on the Shear Strength of Circular Reinforced Concrete Columns.", University of California, San Diego, 1997.</reference>
+        </specimen>
+        <adminInfo>
+            <submissionDate> </submissionDate>
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">31.2</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">200</yieldStress>
+            </transverseSteel>
+            <longitudinalSteel>
+                <yieldStress units="MPa">437.6</yieldStress>
+                <strength units="MPa">688</strength>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <diameter units="mm">609.6</diameter>
+            <crossSection>Circular</crossSection>
+            <lInflection units="mm">1,219.2</lInflection>
+            <lMeasured units="mm">1,219.2</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">18.8</axialLoad>
+            <PDCode>Shear provided</PDCode>
+            <lBottom>457.2</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">15.9</diameter>
+            <numberOfBars>20</numberOfBars>
+            <reinforcementRatio>0.0136</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <diameterSpiral>4.9</diameterSpiral>
+            <hoopSpacing units="mm">101.6</hoopSpacing>
+            <coverToCenter units="mm">18.6</coverToCenter>
+            <volTransReinfRatio>0.13</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Shear</failureType>
+        <damage>
+            <crushing units="mm">0</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/circol/txfiles/mcdanielS2.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

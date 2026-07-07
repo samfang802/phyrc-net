@@ -1,0 +1,97 @@
+<columnTests>
+    <columnTest id="PEER-SPD-150" version="1">
+        <specimen>
+            <name>Xiao and Martirossyan 1998, HC4-8L16-T6-0.2P</name>
+            <type>Rectangular</type>
+            <comments/>
+            <reference> 
+Xiao, Yan; and Martirossyan, Armen, "Seismic Performance of High-Strength Concrete Columns," Journal of Structural Engineering, March, 1998, pp. 241-251.</reference>
+        </specimen>
+        <adminInfo>
+            <!-- Generated from audit trail records in the database -->
+            <submissionDate> </submissionDate>
+            <!-- Person who created/last updated this record -->
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <!-- Original data owner and any restrictions on use -->
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">86</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">449</yieldStress>
+                <strength units="MPa">0</strength>
+                <grade/>
+            </transverseSteel>
+            <longitudinalSteel>
+                <grade/>
+                <corner>
+                    <yieldStress units="MPa">510</yieldStress>
+                    <strength units="MPa">0</strength>
+                </corner>
+                <intermediate>
+                    <yieldStress units="MPa">510</yieldStress>
+                    <strength units="MPa">0</strength>
+                </intermediate>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <width units="mm">254</width>
+            <depth units="mm">254</depth>
+            <lInflection units="mm">508</lInflection>
+            <lMeasured units="mm">508</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Double Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">1,068</axialLoad>
+            <PDCode>Shear provided</PDCode>
+            <lTop>0</lTop>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">15.9</diameter>
+            <diameterIntermediate units="mm">15.9</diameterIntermediate>
+            <numberOfBars>8</numberOfBars>
+            <perpendicularToLoad>
+                <clearCover units="mm">13</clearCover>
+                <numberIntermediateBars>1</numberIntermediateBars>
+            </perpendicularToLoad>
+            <parallelToLoad>
+                <clearCover units="mm">13</clearCover>
+                <numberIntermediateBars>1</numberIntermediateBars>
+            </parallelToLoad>
+            <reinforcementRatio>0.0246</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <type>RJ: Rectangular ties with J-hooks</type>
+            <numberShearLegs>3</numberShearLegs>
+            <closeSpacing>
+                <barDiameter units="mm">6.4</barDiameter>
+                <numberHoopSets>9</numberHoopSets>
+                <hoopSpacing units="mm">51</hoopSpacing>
+            </closeSpacing>
+            <!-- If uniform, this section will be missing -->
+            <wideSpacing>
+                <barDiameter units="mm">0</barDiameter>
+                <numberHoopSets>0</numberHoopSets>
+                <hoopSpacing units="mm">0</hoopSpacing>
+            </wideSpacing>
+            <volTransReinfRatio>0.016</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure-Shear</failureType>
+        <damage>
+            <crushing units="mm">0</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">22</longBarFracture>
+            <spiralFracture units="mm">22</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/rectcol/txfiles/x816620.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

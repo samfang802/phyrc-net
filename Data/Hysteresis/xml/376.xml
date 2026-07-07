@@ -1,0 +1,67 @@
+<columnTests>
+    <columnTest id="PEER-SPD-376" version="1">
+        <specimen>
+            <name>Calderone et al. 2000, 1028</name>
+            <type>Spiral</type>
+            <comments>0.9% hoop steel provided up to 4 feet from base.</comments>
+            <reference> 
+Calderone, A.J., Lehman, D.E.; Moehle, J.P.; "Behavior of Reinforced Concrete Bridge Columns Having Varying Aspect Ratios and Varying Lengths of Confinement," Pacific Earthquake Engineering Research Center, PEER 2000/08, 2000</reference>
+        </specimen>
+        <adminInfo>
+            <submissionDate> </submissionDate>
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">34.5</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">606.8</yieldStress>
+            </transverseSteel>
+            <longitudinalSteel>
+                <yieldStress units="MPa">441.3</yieldStress>
+                <strength units="MPa">602</strength>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <diameter units="mm">609.6</diameter>
+            <crossSection>Circular</crossSection>
+            <lInflection units="mm">6,096</lInflection>
+            <lMeasured units="mm">6,096</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">911.84</axialLoad>
+            <PDCode>P Ram rotation decreases V</PDCode>
+            <lBottom>450</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">19</diameter>
+            <numberOfBars>28</numberOfBars>
+            <reinforcementRatio>0.0273</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <diameterSpiral>6.4</diameterSpiral>
+            <hoopSpacing units="mm">25.4</hoopSpacing>
+            <coverToCenter units="mm">28.6</coverToCenter>
+            <volTransReinfRatio>0.89</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure</failureType>
+        <damage>
+            <crushing units="mm">0</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">889</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">889</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="graph" description="Force-Displacement Hysteresis">http://depts.washington.edu/columdat/circol/images/leh1028.jpeg</link>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/circol/txfiles/leh1028.txt</link>
+            <link type="report" description="PEER-2000/08">http://peer.berkeley.edu/publications/peer_reports/reports_2000/0008.pdf</link>
+        </links>
+    </columnTest>
+</columnTests>

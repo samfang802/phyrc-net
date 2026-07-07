@@ -1,0 +1,68 @@
+<columnTests>
+    <columnTest id="PEER-SPD-373" version="1">
+        <specimen>
+            <name>Lehman et al. 1998, 430</name>
+            <type>Spiral</type>
+            <comments>Longitudinal bars were bundled in two layers</comments>
+            <reference> 
+Lehman, D.E.; Moehle, J.P.; "Seismic Performance of Well-Confined Concrete Bridge Columns," Pacific Earthquake Engineering Research Center, PEER 1998/01, Dec. 2000</reference>
+        </specimen>
+        <adminInfo>
+            <submissionDate> </submissionDate>
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">31</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">606.8</yieldStress>
+            </transverseSteel>
+            <longitudinalSteel>
+                <yieldStress units="MPa">462</yieldStress>
+                <strength units="MPa">630</strength>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <diameter units="mm">609.6</diameter>
+            <crossSection>Circular</crossSection>
+            <lInflection units="mm">2,438.4</lInflection>
+            <lMeasured units="mm">2,438.4</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">653.86</axialLoad>
+            <PDCode>P Ram rotation decreases V</PDCode>
+            <lBottom>450</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">15.9</diameter>
+            <numberOfBars>44</numberOfBars>
+            <reinforcementRatio>0.0298</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <diameterSpiral>6.4</diameterSpiral>
+            <hoopSpacing units="mm">31.8</hoopSpacing>
+            <coverToCenter units="mm">22.2</coverToCenter>
+            <volTransReinfRatio>0.7</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure</failureType>
+        <damage>
+            <crushing units="mm">38.1</crushing>
+            <spalling units="mm">50.8</spalling>
+            <buckling units="mm">178</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">178</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="graph" description="Force-Displacement Hysteresis">http://depts.washington.edu/columdat/circol/images/leh430.jpeg</link>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/circol/txfiles/leh430.txt</link>
+            <link type="report" description="PEER-1998/01">http://peer.berkeley.edu/publications/peer_reports/reports_1998/9801.pdf</link>
+            <link type="photo" description="Column 430 Spalled Region">http://peer.berkeley.edu/spdata/lehman_moehle_1998/fig3_22.jpg</link>
+        </links>
+    </columnTest>
+</columnTests>

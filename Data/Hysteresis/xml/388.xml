@@ -1,0 +1,66 @@
+<columnTests>
+    <columnTest id="PEER-SPD-388" version="1">
+        <specimen>
+            <name>Nelson and Price 2000, Col1</name>
+            <type>Spiral</type>
+            <comments>Axial load varies</comments>
+            <reference> 
+Nelson, Jared M., "Damage Model Calibration for Reinforced Concrete Columns", Master's Thesis, Department of Civil and Environmental Engineering, University of Washington, 2000</reference>
+        </specimen>
+        <adminInfo>
+            <submissionDate> </submissionDate>
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">56.2</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">455</yieldStress>
+            </transverseSteel>
+            <longitudinalSteel>
+                <yieldStress units="MPa">455</yieldStress>
+                <strength units="MPa">723.5</strength>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <diameter units="mm">508</diameter>
+            <crossSection>Circular</crossSection>
+            <lInflection units="mm">1,524</lInflection>
+            <lMeasured units="mm">1,524</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">1,450</axialLoad>
+            <PDCode>P Ram rotation decreases V</PDCode>
+            <lBottom>609.6</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">16</diameter>
+            <numberOfBars>10</numberOfBars>
+            <reinforcementRatio>0.0099</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <diameterSpiral>4.5</diameterSpiral>
+            <hoopSpacing units="mm">102</hoopSpacing>
+            <coverToCenter units="mm">21.3</coverToCenter>
+            <volTransReinfRatio>0.13</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure</failureType>
+        <damage>
+            <crushing units="mm">0</crushing>
+            <spalling units="mm">30</spalling>
+            <buckling units="mm">47.5</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">47.5</spiralFracture>
+            <lossAxial units="mm">53.8</lossAxial>
+        </damage>
+        <links>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/circol/txfiles/nelpric1.txt</link>
+            <link type="diagram" description="Test Setup">http://peer.berkeley.edu/spdata/nelson_price_2000/test_setup.gif</link>
+        </links>
+    </columnTest>
+</columnTests>

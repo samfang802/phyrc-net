@@ -1,0 +1,91 @@
+<columnTests>
+    <columnTest id="PEER-SPD-196" version="1">
+        <specimen>
+            <name>Aboutaha and Machado 1999, ORC1</name>
+            <type>Rectangular</type>
+            <comments>Missing key steel properties</comments>
+            <reference> 
+Aboutaha, R.S.; and Machado, R.I., "Seismic Resistance of Steel-Tubed High-Strength Reinforced-Concrete Columns", Journal of Structural Engineering, May 1999, pp. 485-494.</reference>
+        </specimen>
+        <adminInfo>
+            <!-- Generated from audit trail records in the database -->
+            <submissionDate> </submissionDate>
+            <!-- Person who created/last updated this record -->
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <!-- Original data owner and any restrictions on use -->
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">83</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">0</yieldStress>
+                <strength units="MPa">0</strength>
+                <grade/>
+            </transverseSteel>
+            <longitudinalSteel>
+                <grade/>
+                <corner>
+                    <yieldStress units="MPa">0</yieldStress>
+                    <strength units="MPa">0</strength>
+                </corner>
+                <intermediate>
+                    <yieldStress units="MPa">0</yieldStress>
+                    <strength units="MPa">0</strength>
+                </intermediate>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <width units="mm">305</width>
+            <depth units="mm">508</depth>
+            <lInflection units="mm">1,829</lInflection>
+            <lMeasured units="mm">1,829</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">0</axialLoad>
+            <PDCode/>
+            <lTop>0</lTop>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">25</diameter>
+            <diameterIntermediate units="mm">25</diameterIntermediate>
+            <numberOfBars>8</numberOfBars>
+            <perpendicularToLoad>
+                <clearCover units="mm">0</clearCover>
+                <numberIntermediateBars>1</numberIntermediateBars>
+            </perpendicularToLoad>
+            <parallelToLoad>
+                <clearCover units="mm">0</clearCover>
+                <numberIntermediateBars>1</numberIntermediateBars>
+            </parallelToLoad>
+            <reinforcementRatio>0.0253</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <type>RJ: Rectangular ties with J-hooks</type>
+            <numberShearLegs>4</numberShearLegs>
+            <closeSpacing>
+                <barDiameter units="mm">10</barDiameter>
+                <numberHoopSets>0</numberHoopSets>
+                <hoopSpacing units="mm">75</hoopSpacing>
+            </closeSpacing>
+            <volTransReinfRatio>0</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure</failureType>
+        <damage>
+            <crushing units="mm">0</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/rectcol/txfiles/abouorc1.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

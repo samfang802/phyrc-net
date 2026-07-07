@@ -1,0 +1,91 @@
+<columnTests>
+    <columnTest id="PEER-SPD-26" version="1">
+        <specimen>
+            <name>Park and Paulay 1990, No. 9</name>
+            <type>Rectangular</type>
+            <comments/>
+            <reference> 
+Park, R.; and Paulay, T., "Use of Interlocking Spirals for Transverse Reinforcement in Bridge Columns." Strength and Ductility of Concrete Substructures of Bridges, RRU (Road Research Unit) Bulletin 84, Vol. 1, 1990, pp. 77-92.</reference>
+        </specimen>
+        <adminInfo>
+            <!-- Generated from audit trail records in the database -->
+            <submissionDate> </submissionDate>
+            <!-- Person who created/last updated this record -->
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <!-- Original data owner and any restrictions on use -->
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">26.9</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">305</yieldStress>
+                <strength units="MPa">0</strength>
+                <grade/>
+            </transverseSteel>
+            <longitudinalSteel>
+                <grade>380</grade>
+                <corner>
+                    <yieldStress units="MPa">432</yieldStress>
+                    <strength units="MPa">0</strength>
+                </corner>
+                <intermediate>
+                    <yieldStress units="MPa">432</yieldStress>
+                    <strength units="MPa">0</strength>
+                </intermediate>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <width units="mm">400</width>
+            <depth units="mm">600</depth>
+            <lInflection units="mm">1,784</lInflection>
+            <lMeasured units="mm">1,784</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">646</axialLoad>
+            <PDCode>Shear provided</PDCode>
+            <lTop>0</lTop>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">24</diameter>
+            <diameterIntermediate units="mm">24</diameterIntermediate>
+            <numberOfBars>10</numberOfBars>
+            <perpendicularToLoad>
+                <clearCover units="mm">24</clearCover>
+                <numberIntermediateBars>1</numberIntermediateBars>
+            </perpendicularToLoad>
+            <parallelToLoad>
+                <clearCover units="mm">24</clearCover>
+                <numberIntermediateBars>2</numberIntermediateBars>
+            </parallelToLoad>
+            <reinforcementRatio>0.0188</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <type>RIJ: Rectangular and interlocking ties with J-hooks</type>
+            <numberShearLegs>3</numberShearLegs>
+            <closeSpacing>
+                <barDiameter units="mm">12</barDiameter>
+                <numberHoopSets>9</numberHoopSets>
+                <hoopSpacing units="mm">80</hoopSpacing>
+            </closeSpacing>
+            <volTransReinfRatio>0.022</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure</failureType>
+        <damage>
+            <crushing units="mm">0</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">84</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/rectcol/txfiles/tana90u9.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

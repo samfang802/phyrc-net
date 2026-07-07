@@ -1,0 +1,66 @@
+<columnTests>
+    <columnTest id="PEER-SPD-300" version="1">
+        <specimen>
+            <name>Petrovsky and Ristic 1984, M1E2</name>
+            <type>Spiral</type>
+            <comments/>
+            <reference> 
+Petrovski, Jakim; and Ristic, Danilo, Reversed Cyclic Loading Test of Bridge Column Models, Report IZIIZ 84-164, Institute of Earthquake Engineering and Engineering Seismology, September 1984, 62 pages.</reference>
+        </specimen>
+        <adminInfo>
+            <submissionDate> </submissionDate>
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">36.2</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">240</yieldStress>
+            </transverseSteel>
+            <longitudinalSteel>
+                <yieldStress units="MPa">240</yieldStress>
+                <strength units="MPa">0</strength>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <diameter units="mm">307</diameter>
+            <crossSection>Circular</crossSection>
+            <lInflection units="mm">1,910</lInflection>
+            <lMeasured units="mm">1,910</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">254</axialLoad>
+            <PDCode>Not defined in report</PDCode>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">12</diameter>
+            <numberOfBars>12</numberOfBars>
+            <reinforcementRatio>0.0183</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <diameterSpiral>6</diameterSpiral>
+            <hoopSpacing units="mm">75</hoopSpacing>
+            <coverToCenter units="mm">36</coverToCenter>
+            <volTransReinfRatio>0.63</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure</failureType>
+        <damage>
+            <crushing units="mm">0</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="graph" description="Force-Displacement Hysteresis">http://depts.washington.edu/columdat/circol/images/petm1e2.jpeg</link>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/circol/txfiles/petm1e2.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

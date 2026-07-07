@@ -1,0 +1,66 @@
+<columnTests>
+    <columnTest id="PEER-SPD-258" version="1">
+        <specimen>
+            <name>Ng et al. 1978, No. 2</name>
+            <type>Spiral</type>
+            <comments>Specimen had pier cap</comments>
+            <reference> 
+Ng Kit Heng; Priestley, M.J.N.; and Park, R., Seismic Behaviour of Circular Reinforced Concrete Bridge Piers, Report 78-14, Department of Civil Engineering, University of Canterbury, Christchurch, New Zealand, February 1978, 129 pages.</reference>
+        </specimen>
+        <adminInfo>
+            <submissionDate> </submissionDate>
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">35.1</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">263</yieldStress>
+            </transverseSteel>
+            <longitudinalSteel>
+                <yieldStress units="MPa">305</yieldStress>
+                <strength units="MPa">411</strength>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <diameter units="mm">250</diameter>
+            <crossSection>Octagonal</crossSection>
+            <lInflection units="mm">1,340</lInflection>
+            <lMeasured units="mm">1,340</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Cantilever with Hammer Head</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">16.9</axialLoad>
+            <PDCode>Feff provided</PDCode>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">13</diameter>
+            <numberOfBars>10</numberOfBars>
+            <reinforcementRatio>0.0256</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <diameterSpiral>4.4</diameterSpiral>
+            <hoopSpacing units="mm">14</hoopSpacing>
+            <coverToCenter units="mm">10.8</coverToCenter>
+            <volTransReinfRatio>1.87</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure</failureType>
+        <damage>
+            <crushing units="mm">0</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="graph" description="Force-Displacement Hysteresis">http://depts.washington.edu/columdat/circol/images/ng78no2.jpeg</link>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/circol/txfiles/ng78no2.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

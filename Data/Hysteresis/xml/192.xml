@@ -1,0 +1,91 @@
+<columnTests>
+    <columnTest id="PEER-SPD-192" version="1">
+        <specimen>
+            <name>Mo and Wang 2000,C2-3</name>
+            <type>Rectangular</type>
+            <comments/>
+            <reference> 
+Mo, Y.L.; and Wang, S.J., "Seismic Behavior of RC Columns with Various Tie Configurations", Journal of Structural Engineering, ASCE, Vol. 126 No.10, October, 2000, pp. 1122-1130</reference>
+        </specimen>
+        <adminInfo>
+            <!-- Generated from audit trail records in the database -->
+            <submissionDate> </submissionDate>
+            <!-- Person who created/last updated this record -->
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <!-- Original data owner and any restrictions on use -->
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">26.8</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">459.5</yieldStress>
+                <strength units="MPa">576.5</strength>
+                <grade/>
+            </transverseSteel>
+            <longitudinalSteel>
+                <grade/>
+                <corner>
+                    <yieldStress units="MPa">497</yieldStress>
+                    <strength units="MPa">592</strength>
+                </corner>
+                <intermediate>
+                    <yieldStress units="MPa">497</yieldStress>
+                    <strength units="MPa">592</strength>
+                </intermediate>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <width units="mm">400</width>
+            <depth units="mm">400</depth>
+            <lInflection units="mm">1,400</lInflection>
+            <lMeasured units="mm">1,400</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">900</axialLoad>
+            <PDCode>P Ram rotation decreases V</PDCode>
+            <lTop>0</lTop>
+            <lBottom>800</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">19</diameter>
+            <diameterIntermediate units="mm">19</diameterIntermediate>
+            <numberOfBars>12</numberOfBars>
+            <perpendicularToLoad>
+                <clearCover units="mm">34</clearCover>
+                <numberIntermediateBars>2</numberIntermediateBars>
+            </perpendicularToLoad>
+            <parallelToLoad>
+                <clearCover units="mm">34</clearCover>
+                <numberIntermediateBars>2</numberIntermediateBars>
+            </parallelToLoad>
+            <reinforcementRatio>0.0214</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <type>RI: Rectangular and interlocking ties</type>
+            <numberShearLegs>4</numberShearLegs>
+            <closeSpacing>
+                <barDiameter units="mm">6.3</barDiameter>
+                <numberHoopSets>0</numberHoopSets>
+                <hoopSpacing units="mm">52</hoopSpacing>
+            </closeSpacing>
+            <volTransReinfRatio>0</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure</failureType>
+        <damage>
+            <crushing units="mm">38</crushing>
+            <spalling units="mm">58</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">109</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/rectcol/txfiles/moc23.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

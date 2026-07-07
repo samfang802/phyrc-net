@@ -1,0 +1,65 @@
+<columnTests>
+    <columnTest id="PEER-SPD-396" version="1">
+        <specimen>
+            <name>Soderstrom 2001,C2</name>
+            <type>Spiral</type>
+            <comments>fy not measured for spiral. Assumed to be 60 ksi.</comments>
+            <reference> 
+Roeder et al, "Seismic Performance of Pile-Wharf Connections", Pacific Earthquake Engineering Research Center, PEER, Dec. 2001.</reference>
+        </specimen>
+        <adminInfo>
+            <submissionDate> </submissionDate>
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">62.6</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">413.7</yieldStress>
+            </transverseSteel>
+            <longitudinalSteel>
+                <yieldStress units="MPa">429.5</yieldStress>
+                <strength units="MPa">717</strength>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <diameter units="mm">419</diameter>
+            <crossSection>Octagonal</crossSection>
+            <lInflection units="mm">1,968.5</lInflection>
+            <lMeasured units="mm">1,968.5</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">0</axialLoad>
+            <PDCode>Shear provided</PDCode>
+            <lBottom>180</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">22.2</diameter>
+            <numberOfBars>8</numberOfBars>
+            <reinforcementRatio>0.0213</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <diameterSpiral>9.5</diameterSpiral>
+            <hoopSpacing units="mm">50.8</hoopSpacing>
+            <coverToCenter units="mm">55.6</coverToCenter>
+            <volTransReinfRatio>1.77</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure</failureType>
+        <damage>
+            <crushing units="mm">0</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/circol/txfiles/sod01C2.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

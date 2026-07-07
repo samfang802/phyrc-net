@@ -1,0 +1,97 @@
+<columnTests>
+    <columnTest id="PEER-SPD-224" version="1">
+        <specimen>
+            <name>Paultre et al., 2001, No. 1008040</name>
+            <type>Rectangular</type>
+            <comments/>
+            <reference> 
+Paultre, P.; Legeron, F.; and Mongeau, D., " Influence of Concrete Strength and Transverse Reinforcement Yield Strength on Behavior of High-Strength Concrete Columns", American Concrete Institute, ACI Structural Journal, Vol. 98, No. 4, July-August 2001,</reference>
+        </specimen>
+        <adminInfo>
+            <!-- Generated from audit trail records in the database -->
+            <submissionDate> </submissionDate>
+            <!-- Person who created/last updated this record -->
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <!-- Original data owner and any restrictions on use -->
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">104.2</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">825</yieldStress>
+                <strength units="MPa">960</strength>
+                <grade>800</grade>
+            </transverseSteel>
+            <longitudinalSteel>
+                <grade>-</grade>
+                <corner>
+                    <yieldStress units="MPa">446</yieldStress>
+                    <strength units="MPa">719</strength>
+                </corner>
+                <intermediate>
+                    <yieldStress units="MPa">499</yieldStress>
+                    <strength units="MPa">734</strength>
+                </intermediate>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <width units="mm">305</width>
+            <depth units="mm">305</depth>
+            <lInflection units="mm">2,000</lInflection>
+            <lMeasured units="mm">2,000</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">3,600</axialLoad>
+            <PDCode>Feff provided</PDCode>
+            <lTop>0</lTop>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">19.5</diameter>
+            <diameterIntermediate units="mm">16</diameterIntermediate>
+            <numberOfBars>8</numberOfBars>
+            <perpendicularToLoad>
+                <clearCover units="mm">19</clearCover>
+                <numberIntermediateBars>1</numberIntermediateBars>
+            </perpendicularToLoad>
+            <parallelToLoad>
+                <clearCover units="mm">19</clearCover>
+                <numberIntermediateBars>1</numberIntermediateBars>
+            </parallelToLoad>
+            <reinforcementRatio>0.0215</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <type>RD: Rectangular and diagonal ties</type>
+            <numberShearLegs>3.4</numberShearLegs>
+            <closeSpacing>
+                <barDiameter units="mm">11.3</barDiameter>
+                <numberHoopSets>25</numberHoopSets>
+                <hoopSpacing units="mm">80</hoopSpacing>
+            </closeSpacing>
+            <!-- If uniform, this section will be missing -->
+            <wideSpacing>
+                <barDiameter units="mm">0</barDiameter>
+                <numberHoopSets>0</numberHoopSets>
+                <hoopSpacing units="mm">0</hoopSpacing>
+            </wideSpacing>
+            <volTransReinfRatio>0</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure</failureType>
+        <damage>
+            <crushing units="mm">0</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/rectcol/txfiles/1008040.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

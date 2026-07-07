@@ -1,0 +1,91 @@
+<columnTests>
+    <columnTest id="PEER-SPD-92" version="1">
+        <specimen>
+            <name>Atalay and Penzien 1975, No. 5S1</name>
+            <type>Rectangular</type>
+            <comments/>
+            <reference> 
+Atalay, M.B.; and Penzien, J. "The Seismic Behavior of Critical Regions of Reinforced Concrete Components as Influenced by Moment, Shear and Axial Force," Report No. EERC 75-19, University of California, Berkeley, December 1975, 226 pages.</reference>
+        </specimen>
+        <adminInfo>
+            <!-- Generated from audit trail records in the database -->
+            <submissionDate> </submissionDate>
+            <!-- Person who created/last updated this record -->
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <!-- Original data owner and any restrictions on use -->
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">29.4</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">392</yieldStress>
+                <strength units="MPa">530</strength>
+                <grade>275</grade>
+            </transverseSteel>
+            <longitudinalSteel>
+                <grade>275</grade>
+                <corner>
+                    <yieldStress units="MPa">429</yieldStress>
+                    <strength units="MPa">657</strength>
+                </corner>
+                <intermediate>
+                    <yieldStress units="MPa">429</yieldStress>
+                    <strength units="MPa">657</strength>
+                </intermediate>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <width units="mm">305</width>
+            <depth units="mm">305</depth>
+            <lInflection units="mm">1,676</lInflection>
+            <lMeasured units="mm">1,676</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Double Ended</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">534</axialLoad>
+            <PDCode>Shear provided</PDCode>
+            <lTop>0</lTop>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">22</diameter>
+            <diameterIntermediate units="mm">22</diameterIntermediate>
+            <numberOfBars>4</numberOfBars>
+            <perpendicularToLoad>
+                <clearCover units="mm">32</clearCover>
+                <numberIntermediateBars>0</numberIntermediateBars>
+            </perpendicularToLoad>
+            <parallelToLoad>
+                <clearCover units="mm">32</clearCover>
+                <numberIntermediateBars>0</numberIntermediateBars>
+            </parallelToLoad>
+            <reinforcementRatio>0.0163</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <type>R: Rectangular ties (around perimeter)</type>
+            <numberShearLegs>2</numberShearLegs>
+            <closeSpacing>
+                <barDiameter units="mm">9.5</barDiameter>
+                <numberHoopSets>9</numberHoopSets>
+                <hoopSpacing units="mm">76</hoopSpacing>
+            </closeSpacing>
+            <volTransReinfRatio>0.015</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure</failureType>
+        <damage>
+            <crushing units="mm">50.8</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/rectcol/txfiles/at75n5s1.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

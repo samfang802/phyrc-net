@@ -1,0 +1,97 @@
+<columnTests>
+    <columnTest id="PEER-SPD-152" version="1">
+        <specimen>
+            <name>Sugano 1996, UC15H</name>
+            <type>Rectangular</type>
+            <comments>cover scaled from sketch</comments>
+            <reference> 
+Sugano, Shunsuke, "Seismic Behavior of Reinforced Concrete Columns Which used Ultra-High-Strength Concrete," Paper No. 1383, Eleventh World Conference on Earthquake Engineering, 1996.</reference>
+        </specimen>
+        <adminInfo>
+            <!-- Generated from audit trail records in the database -->
+            <submissionDate> </submissionDate>
+            <!-- Person who created/last updated this record -->
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <!-- Original data owner and any restrictions on use -->
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">118</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">1,424</yieldStress>
+                <strength units="MPa">1,515</strength>
+                <grade/>
+            </transverseSteel>
+            <longitudinalSteel>
+                <grade/>
+                <corner>
+                    <yieldStress units="MPa">393</yieldStress>
+                    <strength units="MPa">543</strength>
+                </corner>
+                <intermediate>
+                    <yieldStress units="MPa">393</yieldStress>
+                    <strength units="MPa">543</strength>
+                </intermediate>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <width units="mm">225</width>
+            <depth units="mm">225</depth>
+            <lInflection units="mm">450</lInflection>
+            <lMeasured units="mm">450</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Double Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">3,579</axialLoad>
+            <PDCode>Shear provided</PDCode>
+            <lTop>0</lTop>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">10</diameter>
+            <diameterIntermediate units="mm">10</diameterIntermediate>
+            <numberOfBars>12</numberOfBars>
+            <perpendicularToLoad>
+                <clearCover units="mm">11.2</clearCover>
+                <numberIntermediateBars>2</numberIntermediateBars>
+            </perpendicularToLoad>
+            <parallelToLoad>
+                <clearCover units="mm">11.2</clearCover>
+                <numberIntermediateBars>2</numberIntermediateBars>
+            </parallelToLoad>
+            <reinforcementRatio>0.0186</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <type>RI: Rectangular and interlocking ties</type>
+            <numberShearLegs>4</numberShearLegs>
+            <closeSpacing>
+                <barDiameter units="mm">6.4</barDiameter>
+                <numberHoopSets>11</numberHoopSets>
+                <hoopSpacing units="mm">45</hoopSpacing>
+            </closeSpacing>
+            <!-- If uniform, this section will be missing -->
+            <wideSpacing>
+                <barDiameter units="mm">0</barDiameter>
+                <numberHoopSets>0</numberHoopSets>
+                <hoopSpacing units="mm">0</hoopSpacing>
+            </wideSpacing>
+            <volTransReinfRatio>0</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure</failureType>
+        <damage>
+            <crushing units="mm">0.7</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/rectcol/txfiles/suguc15h.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

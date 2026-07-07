@@ -1,0 +1,66 @@
+<columnTests>
+    <columnTest id="PEER-SPD-264" version="1">
+        <specimen>
+            <name>Potangaroa et al. 1979, No. 4</name>
+            <type>Spiral</type>
+            <comments>tested to m=8</comments>
+            <reference> 
+Priestley, M.J.N.; Park, R.; and Potangaroa, R.T., "Ductility of Sprirally-Confined Concrete Columns," Journal of the Structural Division, Proceedings of the ASCE, Vol.107, No. ST1, January 1981, pp. 181-202.</reference>
+        </specimen>
+        <adminInfo>
+            <submissionDate> </submissionDate>
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">32.9</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">423</yieldStress>
+            </transverseSteel>
+            <longitudinalSteel>
+                <yieldStress units="MPa">303</yieldStress>
+                <strength units="MPa">409</strength>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <diameter units="mm">600</diameter>
+            <crossSection>Octagonal</crossSection>
+            <lInflection units="mm">1,200</lInflection>
+            <lMeasured units="mm">1,200</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Double Ended</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">3,785</axialLoad>
+            <PDCode>Shear provided</PDCode>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">24</diameter>
+            <numberOfBars>16</numberOfBars>
+            <reinforcementRatio>0.0243</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <diameterSpiral>10</diameterSpiral>
+            <hoopSpacing units="mm">70</hoopSpacing>
+            <coverToCenter units="mm">25</coverToCenter>
+            <volTransReinfRatio>0.8</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure</failureType>
+        <damage>
+            <crushing units="mm">7.5</crushing>
+            <spalling units="mm">15</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="graph" description="Force-Displacement Hysteresis">http://depts.washington.edu/columdat/circol/images/pot79n4.jpeg</link>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/circol/txfiles/pot79n4.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

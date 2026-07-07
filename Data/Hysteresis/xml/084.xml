@@ -1,0 +1,97 @@
+<columnTests>
+    <columnTest id="PEER-SPD-84" version="1">
+        <specimen>
+            <name>Wight and Sozen 1973, No. 40.147(East)</name>
+            <type>Rectangular</type>
+            <comments/>
+            <reference> 
+Wight, J.K.; and Sozen, M.A., "Shear Strength Decay in Reinforced Concrete Columns Subjected to Large Deflection Reversals," Structural Research Series No. 403, Civil Engineering Studies, University of Illinois, Urbana-Champaign, Ill., Aug 1973, 290 pages</reference>
+        </specimen>
+        <adminInfo>
+            <!-- Generated from audit trail records in the database -->
+            <submissionDate> </submissionDate>
+            <!-- Person who created/last updated this record -->
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <!-- Original data owner and any restrictions on use -->
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">33.5</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">317</yieldStress>
+                <strength units="MPa">482</strength>
+                <grade/>
+            </transverseSteel>
+            <longitudinalSteel>
+                <grade/>
+                <corner>
+                    <yieldStress units="MPa">496</yieldStress>
+                    <strength units="MPa">835</strength>
+                </corner>
+                <intermediate>
+                    <yieldStress units="MPa">496</yieldStress>
+                    <strength units="MPa">835</strength>
+                </intermediate>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <width units="mm">152</width>
+            <depth units="mm">305</depth>
+            <lInflection units="mm">876</lInflection>
+            <lMeasured units="mm">876</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Double Ended</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">178</axialLoad>
+            <PDCode>P Ram rotation decreases V</PDCode>
+            <lTop>152</lTop>
+            <lBottom>267</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">19</diameter>
+            <diameterIntermediate units="mm">19</diameterIntermediate>
+            <numberOfBars>4</numberOfBars>
+            <perpendicularToLoad>
+                <clearCover units="mm">19.1</clearCover>
+                <numberIntermediateBars>0</numberIntermediateBars>
+            </perpendicularToLoad>
+            <parallelToLoad>
+                <clearCover units="mm">32</clearCover>
+                <numberIntermediateBars>0</numberIntermediateBars>
+            </parallelToLoad>
+            <reinforcementRatio>0.0245</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <type>R: Rectangular ties (around perimeter)</type>
+            <numberShearLegs>2</numberShearLegs>
+            <closeSpacing>
+                <barDiameter units="mm">9.5</barDiameter>
+                <numberHoopSets>0</numberHoopSets>
+                <hoopSpacing units="mm">64</hoopSpacing>
+            </closeSpacing>
+            <!-- If uniform, this section will be missing -->
+            <wideSpacing>
+                <barDiameter units="mm">0</barDiameter>
+                <numberHoopSets>0</numberHoopSets>
+                <hoopSpacing units="mm">0</hoopSpacing>
+            </wideSpacing>
+            <volTransReinfRatio>0.015</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure-Shear</failureType>
+        <damage>
+            <crushing units="mm">0</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/rectcol/txfiles/ws147e.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

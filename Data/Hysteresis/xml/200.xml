@@ -1,0 +1,91 @@
+<columnTests>
+    <columnTest id="PEER-SPD-200" version="1">
+        <specimen>
+            <name>Aboutaha et al. 1999, SC9</name>
+            <type>Rectangular</type>
+            <comments/>
+            <reference> 
+Aboutaha, R.S.; Engelhardt, M.D.; Jirsa, J.O.: and Kreger, M.E.; "Rehabilitation of Shear Critical Concrete Columns by Use of Rectangular Steel Jackets", American Concrete Institute, ACI Structural Journal, Vol. 96, No.1, January-February1999, pp.68-78.</reference>
+        </specimen>
+        <adminInfo>
+            <!-- Generated from audit trail records in the database -->
+            <submissionDate> </submissionDate>
+            <!-- Person who created/last updated this record -->
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <!-- Original data owner and any restrictions on use -->
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">16</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">400</yieldStress>
+                <strength units="MPa">627</strength>
+                <grade/>
+            </transverseSteel>
+            <longitudinalSteel>
+                <grade>414</grade>
+                <corner>
+                    <yieldStress units="MPa">434</yieldStress>
+                    <strength units="MPa">690</strength>
+                </corner>
+                <intermediate>
+                    <yieldStress units="MPa">434</yieldStress>
+                    <strength units="MPa">690</strength>
+                </intermediate>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <width units="mm">457.2</width>
+            <depth units="mm">914.4</depth>
+            <lInflection units="mm">1,219.2</lInflection>
+            <lMeasured units="mm">1,219.2</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">0</axialLoad>
+            <PDCode>Feff provided</PDCode>
+            <lTop>0</lTop>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">25</diameter>
+            <diameterIntermediate units="mm">25</diameterIntermediate>
+            <numberOfBars>16</numberOfBars>
+            <perpendicularToLoad>
+                <clearCover units="mm">38</clearCover>
+                <numberIntermediateBars>0</numberIntermediateBars>
+            </perpendicularToLoad>
+            <parallelToLoad>
+                <clearCover units="mm">38</clearCover>
+                <numberIntermediateBars>6</numberIntermediateBars>
+            </parallelToLoad>
+            <reinforcementRatio>0.0188</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <type>I: Interlocking ties</type>
+            <numberShearLegs>2</numberShearLegs>
+            <closeSpacing>
+                <barDiameter units="mm">9.5</barDiameter>
+                <numberHoopSets>3</numberHoopSets>
+                <hoopSpacing units="mm">406.4</hoopSpacing>
+            </closeSpacing>
+            <volTransReinfRatio>0</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Shear</failureType>
+        <damage>
+            <crushing units="mm">0</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/rectcol/txfiles/abousc9.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

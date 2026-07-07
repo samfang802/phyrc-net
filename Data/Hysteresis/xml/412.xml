@@ -1,0 +1,65 @@
+<columnTests>
+    <columnTest id="PEER-SPD-412" version="1">
+        <specimen>
+            <name>Hamilton, 2002, UCI5</name>
+            <type>Spiral</type>
+            <comments>Cross-section SD</comments>
+            <reference> 
+Hamilton, C.H., Pardoen, G.C., Kazanjy, R.P., "Experimental Testing of Bridge Columns Subjected to Reversed-Cyclic and Pulse-type Loading Histories," Report 2001-03, Civil Engineering Technical Report Series, University of California, Irvine, 2002</reference>
+        </specimen>
+        <adminInfo>
+            <submissionDate> </submissionDate>
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">35.4</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">691.5</yieldStress>
+            </transverseSteel>
+            <longitudinalSteel>
+                <yieldStress units="MPa">458.5</yieldStress>
+                <strength units="MPa">646</strength>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <diameter units="mm">406.4</diameter>
+            <crossSection>Circular</crossSection>
+            <lInflection units="mm">1,047.8</lInflection>
+            <lMeasured units="mm">1,047.8</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">0</axialLoad>
+            <PDCode>Feff provided</PDCode>
+            <lBottom>482.6</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">12.7</diameter>
+            <numberOfBars>12</numberOfBars>
+            <reinforcementRatio>0.0117</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <diameterSpiral>4.5</diameterSpiral>
+            <hoopSpacing units="mm">63.5</hoopSpacing>
+            <coverToCenter units="mm">10.4</coverToCenter>
+            <volTransReinfRatio>0.26</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure-Shear</failureType>
+        <damage>
+            <crushing units="mm">0</crushing>
+            <spalling units="mm">0</spalling>
+            <buckling units="mm">0</buckling>
+            <longBarFracture units="mm">0</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/circol/txfiles/hamiltonuci5.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

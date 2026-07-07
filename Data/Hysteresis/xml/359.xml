@@ -1,0 +1,66 @@
+<columnTests>
+    <columnTest id="PEER-SPD-359" version="1">
+        <specimen>
+            <name>Hose et al., 1997, SRPH1</name>
+            <type>Spiral</type>
+            <comments/>
+            <reference> 
+Hose, Y.D., Seible, F. and Priestley, M.J.N., Strategic Relocation of Plastic Hinges in Bridge Columns, Structural Systems Research Project, 97/05, University of California, San Diego, La Jolla, September 1997</reference>
+        </specimen>
+        <adminInfo>
+            <submissionDate> </submissionDate>
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">41.1</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">414</yieldStress>
+            </transverseSteel>
+            <longitudinalSteel>
+                <yieldStress units="MPa">455</yieldStress>
+                <strength units="MPa">746</strength>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <diameter units="mm">610</diameter>
+            <crossSection>Circular</crossSection>
+            <lInflection units="mm">3,660</lInflection>
+            <lMeasured units="mm">3,660</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">1,780</axialLoad>
+            <PDCode>Feff provided</PDCode>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">22.2</diameter>
+            <numberOfBars>20</numberOfBars>
+            <reinforcementRatio>0.0266</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <diameterSpiral>9.5</diameterSpiral>
+            <hoopSpacing units="mm">57</hoopSpacing>
+            <coverToCenter units="mm">27.8</coverToCenter>
+            <volTransReinfRatio>0.89</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure</failureType>
+        <damage>
+            <crushing units="mm">60</crushing>
+            <spalling units="mm">80</spalling>
+            <buckling units="mm">320</buckling>
+            <longBarFracture units="mm">320</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="graph" description="Force-Displacement Hysteresis">http://depts.washington.edu/columdat/circol/images/hos97h1.jpeg</link>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/circol/txfiles/hos97h1.txt</link>
+        </links>
+    </columnTest>
+</columnTests>

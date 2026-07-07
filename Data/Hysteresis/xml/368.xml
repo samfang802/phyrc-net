@@ -1,0 +1,66 @@
+<columnTests>
+    <columnTest id="PEER-SPD-368" version="1">
+        <specimen>
+            <name>Kowalsky et al. 1996, FL3</name>
+            <type>Spiral</type>
+            <comments>normal-weight concrete</comments>
+            <reference> 
+Kowalsky, M.J.; Priestley, M.J.N.; and Seible, F, "Shear and Flexural Behavior of Lightweight Concrete Bridge Columns in Seismic Regions," American Concrete Institute, ACI Structural Journal, Vol. 96, No. 1, January-February 1999, pp. 136-148.</reference>
+        </specimen>
+        <adminInfo>
+            <submissionDate> </submissionDate>
+            <submitter> </submitter>
+            <revisionDate> </revisionDate>
+            <reviser> </reviser>
+            <copyright> </copyright>
+        </adminInfo>
+        <materialProperties>
+            <concreteStrength units="MPa">38.6</concreteStrength>
+            <transverseSteel>
+                <yieldStress units="MPa">445</yieldStress>
+            </transverseSteel>
+            <longitudinalSteel>
+                <yieldStress units="MPa">477</yieldStress>
+                <strength units="MPa">0</strength>
+            </longitudinalSteel>
+        </materialProperties>
+        <geometry>
+            <diameter units="mm">457</diameter>
+            <crossSection>Circular</crossSection>
+            <lInflection units="mm">3,656</lInflection>
+            <lMeasured units="mm">3,656</lMeasured>
+            <lSplice units="mm">0</lSplice>
+            <lBeam units="mm">0</lBeam>
+            <configuration>Cantilever</configuration>
+        </geometry>
+        <loading>
+            <axialLoad units="kN">1,780</axialLoad>
+            <PDCode>Feff provided</PDCode>
+            <lBottom>0</lBottom>
+        </loading>
+        <longitudinalReinforcement>
+            <diameter units="mm">15.9</diameter>
+            <numberOfBars>30</numberOfBars>
+            <reinforcementRatio>0.0362</reinforcementRatio>
+        </longitudinalReinforcement>
+        <transverseReinforcement>
+            <diameterSpiral>9.5</diameterSpiral>
+            <hoopSpacing units="mm">76</hoopSpacing>
+            <coverToCenter units="mm">30.2</coverToCenter>
+            <volTransReinfRatio>0.92</volTransReinfRatio>
+        </transverseReinforcement>
+        <failureType>Flexure</failureType>
+        <damage>
+            <crushing units="mm">68</crushing>
+            <spalling units="mm">102</spalling>
+            <buckling units="mm">340</buckling>
+            <longBarFracture units="mm">340</longBarFracture>
+            <spiralFracture units="mm">0</spiralFracture>
+            <lossAxial units="mm">0</lossAxial>
+        </damage>
+        <links>
+            <link type="graph" description="Force-Displacement Hysteresis">http://depts.washington.edu/columdat/circol/images/kowal96fl3.jpeg</link>
+            <link type="data" description="Force Displacement Data">http://depts.washington.edu/columdat/circol/txfiles/kow96fl3.txt</link>
+        </links>
+    </columnTest>
+</columnTests>
