@@ -10,6 +10,34 @@ from tqdm import tqdm
 from matplotlib import pyplot as plt
 
 
+def _to_hidden_state_matrix(output):
+    hidden = output.detach().cpu()
+    if hidden.dim() == 3:
+        hidden = hidden[0]
+    elif hidden.dim() == 1:
+        hidden = hidden.unsqueeze(0)
+    elif hidden.dim() != 2:
+        raise ValueError(f"Unsupported hidden state shape: {tuple(hidden.shape)}")
+    return hidden
+
+
+def _prepare_hysteresis_plot_arrays(predicted_force, simulated_loop, test_force, maximun_simulated_force):
+    predicted_force = predicted_force.detach().cpu().reshape(-1).numpy()
+    loop = simulated_loop.detach().cpu().numpy()
+    if loop.ndim == 3:
+        loop = loop[0]
+    elif loop.ndim == 1:
+        loop = loop.reshape(1, -1)
+    elif loop.ndim > 2:
+        loop = loop.reshape(-1, loop.shape[-1])
+
+    drift = loop[:, -2].reshape(-1)
+    simulated_force = loop[:, -1].reshape(-1)
+    test_force = test_force.detach().cpu().reshape(-1).numpy()
+    max_simulated_force = float(maximun_simulated_force.detach().cpu().reshape(-1)[0])
+    return predicted_force, drift, simulated_force, test_force, max_simulated_force
+
+
 class HystereticDataset(Dataset):
     """Dataset class for the hystereticDataset dataset."""
     def __init__(self, root, mode=None, data_size="big", specified=[], simulate=True, scale=True, maximum=None, **kwargs):
@@ -128,7 +156,7 @@ class InteriorLoopDataset(Dataset):
                 simulated_loop, test_force, _, maximun_simulated_force, exp = batch
                 simulated_loop = simulated_loop.to(device)
                 output, _ = extractor.L(simulated_loop)
-                hidden_state[exp[0]] = output.cpu().squeeze()
+                hidden_state[exp[0]] = _to_hidden_state_matrix(output)
                 
                 predicted_force = extractor.P(output)
                 self.draw(predicted_force, simulated_loop, test_force, maximun_simulated_force, exp[0], result_dir)
@@ -185,12 +213,9 @@ class InteriorLoopDataset(Dataset):
         return self.time_step.shape[0]
 
     def draw(self, predicted_force, simulated_loop, test_force, maximun_simulated_force, exp, result_dir):
-        predicted_force = predicted_force.cpu().squeeze().detach().numpy()
-        simulated_loop = simulated_loop.cpu().squeeze().detach().numpy()
-        drift = simulated_loop[:, -2]
-        simulated_force = simulated_loop[:, -1]
-        test_force = test_force.cpu().squeeze().detach().numpy()
-        max_simulated_force = maximun_simulated_force.cpu().detach().numpy()
+        predicted_force, drift, simulated_force, test_force, max_simulated_force = _prepare_hysteresis_plot_arrays(
+            predicted_force, simulated_loop, test_force, maximun_simulated_force
+        )
         self.hysteresis[exp] = {"predicted": predicted_force, "simulated": simulated_force, "test": test_force, "drift": drift, "max_simulated_force": max_simulated_force}
         
         fig = plt.figure()
@@ -229,7 +254,7 @@ class PatternLoopDataset(Dataset):
         image = Image.open(os.path.join(self.root, "DamagePattern", "images", filename))
         info = self.info[self.info["id"]==exp].iloc[:, 1:].values.squeeze()
         info = torch.FloatTensor(info)
-        hidden_state = self.hidden_state[exp][timestep, :]
+        hidden_state = self.hidden_state[exp][int(timestep), :]
         image = self.transform(image)
         DI = torch.FloatTensor([DI])
         if direction == "Pull":
@@ -254,7 +279,7 @@ class PatternLoopDataset(Dataset):
                 simulated_loop, test_force, _, maximun_simulated_force, exp = batch
                 simulated_loop = simulated_loop.to(device)
                 output, _ = extractor.L(simulated_loop)
-                hidden_state[exp[0]] = output.cpu().squeeze()
+                hidden_state[exp[0]] = _to_hidden_state_matrix(output)
                 
                 predicted_force = extractor.P(output)
                 self.draw(predicted_force, simulated_loop, test_force, maximun_simulated_force, exp[0], result_dir)
@@ -263,12 +288,9 @@ class PatternLoopDataset(Dataset):
     
     
     def draw(self, predicted_force, simulated_loop, test_force, maximun_simulated_force, exp, result_dir):
-        predicted_force = predicted_force.cpu().squeeze().detach().numpy()
-        simulated_loop = simulated_loop.cpu().squeeze().detach().numpy()
-        drift = simulated_loop[:, -2]
-        simulated_force = simulated_loop[:, -1]
-        test_force = test_force.cpu().squeeze().detach().numpy()
-        max_simulated_force = maximun_simulated_force.cpu().detach().numpy()
+        predicted_force, drift, simulated_force, test_force, max_simulated_force = _prepare_hysteresis_plot_arrays(
+            predicted_force, simulated_loop, test_force, maximun_simulated_force
+        )
         self.hysteresis[exp] = {"predicted": predicted_force, "simulated": simulated_force, "test": test_force, "drift": drift, "max_simulated_force": max_simulated_force}
         
         fig = plt.figure()
