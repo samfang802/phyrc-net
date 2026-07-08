@@ -83,17 +83,23 @@ if __name__ == "__main__":
     val_ds = PatternLoopDataset(root="./Data", mode="val", transform=transform, extractor=extractor, extractor_args=extractor_args, **vars(args))
 
     if args.overfit_single_sample:
+        base_train_ds = train_ds
         train_ds = RepeatSingleSampleDataset(
-            train_ds,
+            base_train_ds,
             sample_index=args.overfit_sample_index,
             repeats=args.overfit_repeat_steps,
         )
-        val_index = args.overfit_sample_index if args.overfit_sample_index < len(val_ds) else 0
+        val_index = args.overfit_sample_index if args.overfit_sample_index < len(base_train_ds) else 0
         val_ds = RepeatSingleSampleDataset(
-            val_ds,
+            base_train_ds,
             sample_index=val_index,
             repeats=max(1, args.overfit_repeat_steps // 4),
         )
+        try:
+            overfit_filename = base_train_ds.label.iloc[val_index]["filename"]
+            print(f"[Overfit mode] train/val use same filename: {overfit_filename}")
+        except Exception:
+            pass
         print(
             f"[Overfit mode] using one sample only: train_idx={args.overfit_sample_index}, "
             f"train_repeats={len(train_ds)}, val_repeats={len(val_ds)}"

@@ -94,7 +94,7 @@ class HystereticCGAN(pl.LightningModule):
         self.G.apply(weights_init)
         self.D.apply(weights_init)
         
-        self.psnr = PeakSignalNoiseRatio()
+        self.psnr = PeakSignalNoiseRatio(data_range=1.0)
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0)
         self.fid = FrechetInceptionDistance(feature=2048, reset_real_features=False, normalize=True) # InceptionV3
         self.bcw = nn.BCEWithLogitsLoss()
@@ -437,7 +437,7 @@ class CFMADM(pl.LightningModule):
             use_mid_attention=True,
         )
 
-        self.psnr = PeakSignalNoiseRatio()
+        self.psnr = PeakSignalNoiseRatio(data_range=1.0)
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0)
         self.fid = FrechetInceptionDistance(feature=2048, reset_real_features=False, normalize=True)
         self.validation_outputs = {"gt_DI": [], "pred_DI": []}
@@ -608,7 +608,7 @@ class Baseline(pl.LightningModule):
         
         self.G.apply(weights_init)
         
-        self.psnr = PeakSignalNoiseRatio()
+        self.psnr = PeakSignalNoiseRatio(data_range=1.0)
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0)
         self.fid = FrechetInceptionDistance(feature=2048, reset_real_features=False, normalize=True) # InceptionV3
         self.bcw = nn.BCEWithLogitsLoss()
