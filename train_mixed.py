@@ -1,8 +1,8 @@
 import os, torch, datetime, importlib, json, glob, argparse
 import lightning.pytorch as pl
 from torch.utils.data import DataLoader
+from torchvision import transforms
 from src.dataset import PatternLoopDataset
-from src.utils import REGRESSOR_CKPT_PATTERNS, resolve_checkpoint, build_damage_image_transform
 from argument.argument_mixed import parse_args, check_args, set_dataset_args, save_args
 
 def _resolve_num_workers(requested_workers):
@@ -26,7 +26,8 @@ class RepeatSingleSampleDataset(torch.utils.data.Dataset):
         self.sample_index = sample_index
         self.repeats = repeats
         if not (0 <= self.sample_index < len(base_dataset)):
-            raise IndexError(f"overfit sample index {sample_index} out of range [0, {len(base_dataset)-1}]")
+            raise IndexError(f"overfit sample index {sample_index} out of range [0, {len(base_dataset) - 1}]")
+        # Keep compatibility with logging code that accesses dataset.hysteresis
         self.hysteresis = getattr(base_dataset, "hysteresis", {})
 
     def __len__(self):
@@ -54,38 +55,11 @@ if __name__ == "__main__":
     # check arguments
     check_args(args, current_time)
     
-    train_transform = build_damage_image_transform(
-        image_size=args.image_size,
-        use_augmentation=args.img_aug,
-        output_scale=True,
-        normalize_mean=(0.5, 0.5, 0.5),
-        normalize_std=(0.5, 0.5, 0.5),
-        aug_prob=args.aug_prob,
-        aug_blur_prob=args.aug_blur_prob,
-        aug_brightness=args.aug_brightness,
-        aug_contrast=args.aug_contrast,
-        aug_saturation=args.aug_saturation,
-        aug_hue=args.aug_hue,
-        aug_translate=args.aug_translate,
-        aug_scale_min=args.aug_scale_min,
-        aug_scale_max=args.aug_scale_max,
-        aug_blur_kernel=args.aug_blur_kernel,
-        aug_blur_sigma_min=args.aug_blur_sigma_min,
-        aug_blur_sigma_max=args.aug_blur_sigma_max,
-        aug_erase_prob=args.aug_erase_prob,
-        aug_erase_scale_min=args.aug_erase_scale_min,
-        aug_erase_scale_max=args.aug_erase_scale_max,
-        aug_erase_ratio_min=args.aug_erase_ratio_min,
-        aug_erase_ratio_max=args.aug_erase_ratio_max,
-        aug_erase_random_value=args.aug_erase_random_value,
-    )
-    val_transform = build_damage_image_transform(
-        image_size=args.image_size,
-        use_augmentation=False,
-        output_scale=True,
-        normalize_mean=(0.5, 0.5, 0.5),
-        normalize_std=(0.5, 0.5, 0.5),
-    )
+    transform = transforms.Compose([
+        transforms.Resize((args.image_size, args.image_size)), 
+        transforms.ToTensor(), 
+        transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
+    ])
     
     # Load extractor
     if not args.extractor_path:
@@ -105,34 +79,52 @@ if __name__ == "__main__":
     
     
     num_workers = _resolve_num_workers(args.num_workers)
-    train_ds = PatternLoopDataset(root="./Data", mode="train", transform=train_transform, extractor=extractor, extractor_args=extractor_args, **vars(args))
-    val_ds = PatternLoopDataset(root="./Data", mode="val", transform=val_transform, extractor=extractor, extractor_args=extractor_args, **vars(args))
+    train_ds = PatternLoopDataset(root="./Data", mode="train", transform=transform, extractor=extractor, extractor_args=extractor_args, **vars(args))
+    val_ds = PatternLoopDataset(root="./Data", mode="val", transform=transform, extractor=extractor, extractor_args=extractor_args, **vars(args))
+
     if args.overfit_single_sample:
-        train_ds = RepeatSingleSampleDataset(train_ds, sample_index=args.overfit_sample_index, repeats=args.overfit_repeat_steps)
+        train_ds = RepeatSingleSampleDataset(
+            train_ds,
+            sample_index=args.overfit_sample_index,
+            repeats=args.overfit_repeat_steps,
+        )
         val_index = args.overfit_sample_index if args.overfit_sample_index < len(val_ds) else 0
-        val_ds = RepeatSingleSampleDataset(val_ds, sample_index=val_index, repeats=max(1, args.overfit_repeat_steps // 4))
+        val_ds = RepeatSingleSampleDataset(
+            val_ds,
+            sample_index=val_index,
+            repeats=max(1, args.overfit_repeat_steps // 4),
+        )
         print(
             f"[Overfit mode] using one sample only: train_idx={args.overfit_sample_index}, "
             f"train_repeats={len(train_ds)}, val_repeats={len(val_ds)}"
         )
-    train_dataloader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=not args.overfit_single_sample, num_workers=num_workers)
+
+    train_dataloader = DataLoader(
+        train_ds,
+        batch_size=args.batch_size,
+        shuffle=not args.overfit_single_sample,
+        num_workers=num_workers,
+    )
     val_dataloader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=num_workers)
     
-    # Load regressor
-    if not args.regressor_path:
-        raise ValueError("Please provide --regressor_path to a trained damage-quantification result directory.")
-    regressor_path = args.regressor_path
-    regressor_args = _load_args_from_result_dir(regressor_path)
-    regressor = importlib.import_module(f"src.model.DamageQuantification").__dict__["DamageQuantification"](**vars(regressor_args))
-    regressor_ckpt = resolve_checkpoint(regressor_path, REGRESSOR_CKPT_PATTERNS, "regressor checkpoint")
-    print(f"Using regressor checkpoint: {regressor_ckpt}")
-    state_dict = torch.load(regressor_ckpt, map_location=device)["state_dict"]
-    status = regressor.load_state_dict(state_dict)
-    regressor = regressor.to(device)
-    regressor.eval()
-    for p in regressor.parameters():
-        p.requires_grad = False
-    print("Regressor Loading Status: ", status)
+    # Load regressor (only required when DI auxiliary loss is enabled)
+    regressor = None
+    if args.add_DI_loss:
+        if not args.regressor_path:
+            raise ValueError("Please provide --regressor_path when --add_DI_loss is enabled.")
+        regressor_path = args.regressor_path
+        regressor_args = _load_args_from_result_dir(regressor_path)
+        regressor = importlib.import_module(f"src.model.DamageQuantification").__dict__["DamageQuantification"](**vars(regressor_args))
+        regressor_ckpt = _resolve_required_match(os.path.join(regressor_path, "**/best_*.ckpt"), "regressor checkpoint")
+        state_dict = torch.load(regressor_ckpt, map_location=device)["state_dict"]
+        status = regressor.load_state_dict(state_dict)
+        regressor = regressor.to(device)
+        regressor.eval()
+        for p in regressor.parameters():
+            p.requires_grad = False
+        print("Regressor Loading Status: ", status)
+    elif args.regressor_path:
+        print("Skipping regressor load: --add_DI_loss is disabled; DI/direction come from label.csv.")
     
     
     
