@@ -1,6 +1,27 @@
 import argparse, os, json
 from distutils.util import strtobool
 
+DEFAULT_COLUMN_INFO = [
+    "id",
+    "concreteStrength",
+    "transverse_yield",
+    "transverse_strength",
+    "longitudinal_corner_yield",
+    "longitudinal_corner_strength",
+    "longitudinal_intermediate_yield",
+    "longitudinal_intermediate_strength",
+    "lMeasured",
+    "axialLoad",
+    "fcc",
+    "epscc",
+    "fcu",
+    "epscu",
+    "Vn",
+    "Vst",
+    "reinforcementRatio",
+    "volTransReinfRatio",
+]
+
 
 """parsing and configuration"""
 def parse_args():
@@ -9,13 +30,16 @@ def parse_args():
     parser.add_argument('--lr', type=float, default=1e-4, help='The learning rate')
     parser.add_argument('--epoch', type=int, default=10, help='The number of epochs to run')
     parser.add_argument('--batch_size', type=int, default=4, help='The size of batch')
-    parser.add_argument('--architecture', type=str, default="HysteresisCGAN", help='The architecture of model')
+    parser.add_argument('--num_workers', type=int, default=2, help='Number of dataloader workers')
+    parser.add_argument('--use_wandb', action="store_true", help='Enable Weights & Biases logging')
+    parser.add_argument('--architecture', type=str, default="HystereticCGAN", help='The architecture of model')
     
-    parser.add_argument('--latent_conditioning', type=lambda x: bool(strtobool(x)), help='Whether to use latent condition')
-    parser.add_argument('--column_info', nargs='+', type=str, help='The column information of data')
-    parser.add_argument('--direction_conditioning', type=lambda x: bool(strtobool(x)), help='Whether to use direction')
-    parser.add_argument('--extractor_path', type=str, default="./", help='The path of extractor')
-    parser.add_argument('--data_path', type=str, default="./", help='The path of data')
+    parser.add_argument('--latent_conditioning', type=lambda x: bool(strtobool(x)), default=False, help='Whether to use latent condition')
+    parser.add_argument('--column_info', nargs='+', type=str, default=DEFAULT_COLUMN_INFO, help='The column information of data')
+    parser.add_argument('--direction_conditioning', type=lambda x: bool(strtobool(x)), default=False, help='Whether to use direction')
+    parser.add_argument('--extractor_path', type=str, default="", help='The path of extractor checkpoint directory')
+    parser.add_argument('--regressor_path', type=str, default="", help='The path of DI regressor checkpoint directory')
+    parser.add_argument('--data_path', type=str, default="id_list.json", help='The path of data split json under Data/DamagePattern')
     
     parser.add_argument('--loss_type', type=str, default="SGAN", help='The type of loss function')
     parser.add_argument('--add_DI_loss', type=lambda x: bool(strtobool(x)), help='Whether to add DI loss')

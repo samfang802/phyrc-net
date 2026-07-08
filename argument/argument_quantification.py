@@ -7,6 +7,8 @@ def parse_args():
     parser.add_argument('--lr', type=float, default=1e-4, help='The learning rate')
     parser.add_argument('--epoch', type=int, default=10, help='The number of epochs to run')
     parser.add_argument('--batch_size', type=int, default=4, help='The size of batch')
+    parser.add_argument('--num_workers', type=int, default=2, help='Number of dataloader workers')
+    parser.add_argument('--use_wandb', action="store_true", help='Enable Weights & Biases logging')
     
     parser.add_argument('--backbone', type=str, default="resnet101", help='The backbone of model')
     parser.add_argument('--pretrained', action="store_true", help='whether to use pretrained model')

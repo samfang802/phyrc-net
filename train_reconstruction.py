@@ -1,17 +1,19 @@
-import os, torch, wandb, datetime, importlib
+import os, torch, datetime, importlib
 import lightning.pytorch as pl
-from argparse import Namespace
 from torch.utils.data import DataLoader
 from torchvision.transforms import v2
 from src.dataset import DamagePatternDataset
 from argument.argument_reconstruction import parse_args, check_args, save_args
 
+def _resolve_num_workers(requested_workers):
+    cpu_count = os.cpu_count() or 1
+    return max(0, min(requested_workers, cpu_count))
+
 
 if __name__ == "__main__":
-    torch.manual_seed(8465468)
-    wandb.login()
-    current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     args = parse_args()
+    torch.manual_seed(args.seed)
+    current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     
     
     callback_list = [
@@ -68,7 +70,7 @@ if __name__ == "__main__":
     check_args(args, current_time)
     
     transforms = v2.Compose([
-        v2.Resize((256, 256)),
+        v2.Resize((args.resolution, args.resolution)),
         v2.ToImage(), 
         v2.ToDtype(torch.float32, scale=False),
     ])
@@ -79,8 +81,9 @@ if __name__ == "__main__":
     train_size = int(0.8 * len(ds))
     val_size = len(ds) - train_size
     train_ds, val_ds = torch.utils.data.random_split(ds, [train_size, val_size]) 
-    train_dataloader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=os.cpu_count())
-    val_dataloader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=os.cpu_count())
+    num_workers = _resolve_num_workers(args.num_workers)
+    train_dataloader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=num_workers)
+    val_dataloader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=num_workers)
 
     
     # save_args
@@ -90,19 +93,21 @@ if __name__ == "__main__":
     print(f"Total number of trainable parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad)/1024/1024:.4f} MB")
     print(model)
 
-    wandb_logger = pl.loggers.WandbLogger(
-        project = "Opensees Based damage Patterns Generation",
-        group = "Damage Pattern Reconstruction",
-        save_dir = args.result_dir, 
-        name = current_time,
-    )
+    logger = pl.loggers.CSVLogger(save_dir=args.result_dir, name="csv_logs")
+    if args.use_wandb:
+        logger = pl.loggers.WandbLogger(
+            project = "Opensees Based damage Patterns Generation",
+            group = "Damage Pattern Reconstruction",
+            save_dir = args.result_dir, 
+            name = current_time,
+        )
     
     # training
-    gpu = "gpu" if torch.cuda.is_available else "cpu"
+    gpu = "gpu" if torch.cuda.is_available() else "cpu"
     trainer = pl.Trainer(
         accelerator = gpu, 
         devices = 1,
-        logger = wandb_logger,
+        logger = logger,
         log_every_n_steps=2,
         max_epochs = args.epoch + 1,
         num_sanity_val_steps=len(val_dataloader),

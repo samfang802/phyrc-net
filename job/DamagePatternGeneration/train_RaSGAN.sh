@@ -14,7 +14,8 @@ module load cuda-12.4
 
 
 python3 train_mixed.py --lr 1e-4 --epoch 3000 --batch_size 4 --architecture HystereticCGAN --loss_type RaSGAN --data_path id_list_old.json\
-        --latent_conditioning True --direction_conditioning True --extractor_path ./results/HystereticPrediction/HystereticGRU/2025-08-01_13-28-08 --add_DI_loss False\
+        --latent_conditioning True --direction_conditioning True --extractor_path ./results/HystereticPrediction/HystereticGRU/2025-08-01_13-28-08 \
+        --regressor_path ./results/DamageQuantification/vit_b_16/2024-06-12_14-01-03 --add_DI_loss False \
         --column_info id concreteStrength transverse_yield transverse_strength longitudinal_corner_yield longitudinal_corner_strength longitudinal_intermediate_yield longitudinal_intermediate_strength lMeasured axialLoad fcc epscc fcu epscu Vn Vst reinforcementRatio volTransReinfRatio \
         --image_size 512 --z_dim 100 --G_h_size 128 --D_h_size 128 --SELU False --spectral_D False \
         --no_batch_norm False 

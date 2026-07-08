@@ -73,7 +73,7 @@ if __name__ == "__main__":
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
-    state_dict = torch.load(glob.glob(os.path.join(result_path, "**/r2*.ckpt"), recursive=True)[0])["state_dict"]
+    state_dict = torch.load(glob.glob(os.path.join(result_path, "**/best_*.ckpt"), recursive=True)[0])["state_dict"]
     status = model.load_state_dict(state_dict)
     print(status)
     

@@ -29,7 +29,8 @@ def draw_results(drift, simulated_force, pred_force, gt_force, result_dir, exp, 
 
 
 if __name__ == "__main__":
-    result_path = "./results/HystereticPrediction_cv/HystereticGRU/2024-10-24_22-42-33"
+    # Update this path to your trained run directory before testing.
+    result_path = "./results/HystereticPrediction/HystereticGRU/<run_id>"
     mode = "val"
     args = json.load(open(glob.glob(os.path.join(result_path, "**/args.json"), recursive=True)[0], "r"))
     args = argparse.Namespace(**args)

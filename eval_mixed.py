@@ -89,7 +89,7 @@ if __name__ == "__main__":
         regressor_args = json.load(open(glob.glob(os.path.join(regressor_path, "**/args.json"), recursive=True)[0], "r"))
         regressor_args = argparse.Namespace(**regressor_args)
         regressor = importlib.import_module(f"src.model.DamageQuantification").__dict__["DamageQuantification"](**vars(regressor_args))
-        status = regressor.load_state_dict(torch.load(glob.glob(os.path.join(regressor_path, "**/r2*.ckpt"), recursive=True)[0])["state_dict"])
+        status = regressor.load_state_dict(torch.load(glob.glob(os.path.join(regressor_path, "**/best_*.ckpt"), recursive=True)[0])["state_dict"])
         regressor = regressor.to(device)
         print("Regressor Loading Status: ", status)
         

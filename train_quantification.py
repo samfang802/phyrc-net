@@ -1,13 +1,16 @@
-import os, torch, wandb, datetime, importlib
+import os, torch, datetime, importlib
 import lightning.pytorch as pl
 from torch.utils.data import DataLoader
 from torchvision.transforms import v2
 from src.dataset import DamageIndexDataset
 from argument.argument_quantification import parse_args, check_args, set_dataset_args, save_args
 
+def _resolve_num_workers(requested_workers):
+    cpu_count = os.cpu_count() or 1
+    return max(0, min(requested_workers, cpu_count))
+
 
 if __name__ == "__main__":
-    # wandb.login()
     current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     args = parse_args()
     
@@ -50,10 +53,11 @@ if __name__ == "__main__":
     ])
     
     
+    num_workers = _resolve_num_workers(args.num_workers)
     train_ds = DamageIndexDataset(root="./Data", mode="train", transform=transforms, **vars(args))
-    train_dataloader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=os.cpu_count())
+    train_dataloader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=num_workers)
     val_ds = DamageIndexDataset(root="./Data", mode="val", transform=transforms, **vars(args))
-    val_dataloader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=os.cpu_count())
+    val_dataloader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=num_workers)
     
 
     
@@ -66,19 +70,21 @@ if __name__ == "__main__":
     print(f"Total number of trainable parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad)/1024/1024:.4f} MB")
     print(model)
 
-    wandb_logger = pl.loggers.WandbLogger(
-        project = "Opensees Based damage Patterns Generation",
-        group = "Damage Quantification",
-        save_dir = args.result_dir, 
-        name = current_time,
-    )
+    logger = pl.loggers.CSVLogger(save_dir=args.result_dir, name="csv_logs")
+    if args.use_wandb:
+        logger = pl.loggers.WandbLogger(
+            project = "Opensees Based damage Patterns Generation",
+            group = "Damage Quantification",
+            save_dir = args.result_dir, 
+            name = current_time,
+        )
     
     # training
-    gpu = "gpu" if torch.cuda.is_available else "cpu"
+    gpu = "gpu" if torch.cuda.is_available() else "cpu"
     trainer = pl.Trainer(
         accelerator = gpu, 
         devices = 1,
-        logger = wandb_logger,
+        logger = logger,
         log_every_n_steps=2,
         max_epochs = args.epoch + 1,
         num_sanity_val_steps=len(val_dataloader),
