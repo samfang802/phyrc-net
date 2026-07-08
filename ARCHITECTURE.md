@@ -25,7 +25,6 @@ flowchart TB
 
     subgraph Optional Branches
         R[ImageReconstruction<br/>VQGAN / VAE]
-        DF[Component/diffusion<br/>Latent diffusion - not wired in]
     end
 
     D1 --> S1
@@ -35,7 +34,6 @@ flowchart TB
     D1 --> S3
     D2 --> S3
     D2 -.-> R
-    R -.-> DF
 ```
 
 | Stage | Model | Input | Output | Training Script | Argument File |
@@ -78,8 +76,7 @@ intership-project/
 |   |       |-- generative.py         #   DCGAN generator / discriminator
 |   |       |-- rnn.py                #   LSTM, GRU, Predictor MLP
 |   |       |-- diffusionmodules.py   #   Encoder / Decoder (U-Net style)
-|   |       |-- quantize.py           #   Vector quantization (VQ-VAE)
-|   |       `-- diffusion/              #   DDPM / DDIM / PLMS (requires external ldm)
+|   |       `-- quantize.py           #   Vector quantization (VQ-VAE)
 |   `-- losses/
 |       |-- lpips.py                  #   Perceptual loss (pretrained VGG)
 |       |-- contperceptual.py         #   Full VAE loss
@@ -337,7 +334,7 @@ Update hardcoded result paths inside `test_*.py` and `eval_mixed.py` before runn
 | **Preprocessing** | `mander/` | Source data; training reads from `Data/` |
 | **Analysis** | `PDSHM/`, `eval/`, `*.ipynb` | Paper plots, manual comparisons |
 | **Auto-generated** | `taming/`, `__pycache__/` | Runtime caches; safe to ignore or delete |
-| **Not wired in** | `src/model/Component/diffusion/` | Requires external `ldm` package |
+| **Deprecated/removed** | `src/model/Component/diffusion/` | Removed in cleanup (unused legacy path) |
 
 ---
 
@@ -349,7 +346,7 @@ Update hardcoded result paths inside `test_*.py` and `eval_mixed.py` before runn
 
 3. **VAE/VQGAN are trained from scratch** on project data. Only the LPIPS perceptual backbone uses pretrained weights.
 
-4. **Diffusion code is present but optional.** Files under `Component/diffusion/` import `ldm.*` and are not used by default training scripts.
+4. **Legacy diffusion helper blocks were removed.** The previous `Component/diffusion/` path was not connected to the active training scripts.
 
 5. **Single training path.** Cross-validation entrypoints were removed; use the main `train_hysteresis.py` script for Stage 1.
 
@@ -374,6 +371,6 @@ Update hardcoded result paths inside `test_*.py` and `eval_mixed.py` before runn
 
 ## Summary
 
-> Starting from **OpenSees-simulated hysteresis loops**, the framework uses an RNN to extract temporal features, a vision model to quantify damage, and a conditional GAN to generate **RC bridge column damage pattern images**. VQGAN/VAE and diffusion modules provide optional image representation learning paths that are not yet integrated into the main three-stage pipeline.
+> Starting from **OpenSees-simulated hysteresis loops**, the framework uses an RNN to extract temporal features, a vision model to quantify damage, and a conditional generator (GAN/CFM backend) to produce **RC bridge column damage pattern images**. VQGAN/VAE provides an optional image representation learning branch.
 
 For setup and command examples, see [README.md](README.md).

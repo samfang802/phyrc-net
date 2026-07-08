@@ -1,8 +1,8 @@
 import os, torch, datetime, importlib
 import lightning.pytorch as pl
 from torch.utils.data import DataLoader
-from torchvision.transforms import v2
 from src.dataset import DamagePatternDataset
+from src.utils import build_damage_image_transform
 from argument.argument_reconstruction import parse_args, check_args, save_args
 
 def _resolve_num_workers(requested_workers):
@@ -69,18 +69,45 @@ if __name__ == "__main__":
     # check arguments
     check_args(args, current_time)
     
-    transforms = v2.Compose([
-        v2.Resize((args.resolution, args.resolution)),
-        v2.ToImage(), 
-        v2.ToDtype(torch.float32, scale=False),
-    ])
-    
-    
-    ds = DamagePatternDataset(root="./Data", transform=transforms)
+    train_transform = build_damage_image_transform(
+        image_size=args.resolution,
+        use_augmentation=args.img_aug,
+        output_scale=False,
+        aug_prob=args.aug_prob,
+        aug_blur_prob=args.aug_blur_prob,
+        aug_brightness=args.aug_brightness,
+        aug_contrast=args.aug_contrast,
+        aug_saturation=args.aug_saturation,
+        aug_hue=args.aug_hue,
+        aug_translate=args.aug_translate,
+        aug_scale_min=args.aug_scale_min,
+        aug_scale_max=args.aug_scale_max,
+        aug_blur_kernel=args.aug_blur_kernel,
+        aug_blur_sigma_min=args.aug_blur_sigma_min,
+        aug_blur_sigma_max=args.aug_blur_sigma_max,
+        aug_erase_prob=args.aug_erase_prob,
+        aug_erase_scale_min=args.aug_erase_scale_min,
+        aug_erase_scale_max=args.aug_erase_scale_max,
+        aug_erase_ratio_min=args.aug_erase_ratio_min,
+        aug_erase_ratio_max=args.aug_erase_ratio_max,
+        aug_erase_random_value=args.aug_erase_random_value,
+    )
+    val_transform = build_damage_image_transform(
+        image_size=args.resolution,
+        use_augmentation=False,
+        output_scale=False,
+    )
+
+    ds = DamagePatternDataset(root="./Data", transform=val_transform)
     # Split the dataset into train and validation
     train_size = int(0.8 * len(ds))
     val_size = len(ds) - train_size
-    train_ds, val_ds = torch.utils.data.random_split(ds, [train_size, val_size]) 
+    generator = torch.Generator().manual_seed(args.seed)
+    indices = torch.randperm(len(ds), generator=generator).tolist()
+    train_indices = indices[:train_size]
+    val_indices = indices[train_size:]
+    train_ds = torch.utils.data.Subset(DamagePatternDataset(root="./Data", transform=train_transform), train_indices)
+    val_ds = torch.utils.data.Subset(DamagePatternDataset(root="./Data", transform=val_transform), val_indices)
     num_workers = _resolve_num_workers(args.num_workers)
     train_dataloader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=num_workers)
     val_dataloader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=num_workers)

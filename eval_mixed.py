@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from src.dataset import PatternLoopDataset
+from src.utils import REGRESSOR_CKPT_PATTERNS, resolve_checkpoint
 from PIL import Image
 from torch.utils.data import DataLoader, ConcatDataset
 from torchvision import transforms
@@ -89,7 +90,8 @@ if __name__ == "__main__":
         regressor_args = json.load(open(glob.glob(os.path.join(regressor_path, "**/args.json"), recursive=True)[0], "r"))
         regressor_args = argparse.Namespace(**regressor_args)
         regressor = importlib.import_module(f"src.model.DamageQuantification").__dict__["DamageQuantification"](**vars(regressor_args))
-        status = regressor.load_state_dict(torch.load(glob.glob(os.path.join(regressor_path, "**/best_*.ckpt"), recursive=True)[0])["state_dict"])
+        regressor_ckpt = resolve_checkpoint(regressor_path, REGRESSOR_CKPT_PATTERNS, "regressor checkpoint")
+        status = regressor.load_state_dict(torch.load(regressor_ckpt)["state_dict"])
         regressor = regressor.to(device)
         print("Regressor Loading Status: ", status)
         

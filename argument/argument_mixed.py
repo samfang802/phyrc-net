@@ -37,6 +37,7 @@ def parse_args():
     parser.add_argument('--latent_conditioning', type=lambda x: bool(strtobool(x)), default=False, help='Whether to use latent condition')
     parser.add_argument('--column_info', nargs='+', type=str, default=DEFAULT_COLUMN_INFO, help='The column information of data')
     parser.add_argument('--direction_conditioning', type=lambda x: bool(strtobool(x)), default=False, help='Whether to use direction')
+    parser.add_argument('--include_di_conditioning', type=lambda x: bool(strtobool(x)), default=False, help='Append DI to latent conditioning (hidden_state [+ direction + DI])')
     parser.add_argument('--extractor_path', type=str, default="", help='The path of extractor checkpoint directory')
     parser.add_argument('--regressor_path', type=str, default="", help='The path of DI regressor checkpoint directory')
     parser.add_argument('--data_path', type=str, default="id_list.json", help='The path of data split json under Data/DamagePattern')
@@ -44,12 +45,43 @@ def parse_args():
     parser.add_argument('--loss_type', type=str, default="SGAN", help='The type of loss function')
     parser.add_argument('--add_DI_loss', type=lambda x: bool(strtobool(x)), help='Whether to add DI loss')
     parser.add_argument('--image_size', type=int, default=128, help='The size of input image')
+    parser.add_argument('--img_aug', action="store_true", help='Enable damage image augmentation for training split')
+    parser.add_argument('--aug_prob', type=float, default=0.5, help='Probability for color and affine augmentation')
+    parser.add_argument('--aug_blur_prob', type=float, default=0.15, help='Probability for Gaussian blur augmentation')
+    parser.add_argument('--aug_brightness', type=float, default=0.12, help='Color jitter brightness delta')
+    parser.add_argument('--aug_contrast', type=float, default=0.12, help='Color jitter contrast delta')
+    parser.add_argument('--aug_saturation', type=float, default=0.08, help='Color jitter saturation delta')
+    parser.add_argument('--aug_hue', type=float, default=0.02, help='Color jitter hue delta')
+    parser.add_argument('--aug_translate', type=float, default=0.02, help='Random affine translate ratio')
+    parser.add_argument('--aug_scale_min', type=float, default=0.98, help='Random affine minimum scale')
+    parser.add_argument('--aug_scale_max', type=float, default=1.02, help='Random affine maximum scale')
+    parser.add_argument('--aug_blur_kernel', type=int, default=3, help='Gaussian blur kernel size (odd)')
+    parser.add_argument('--aug_blur_sigma_min', type=float, default=0.1, help='Gaussian blur minimum sigma')
+    parser.add_argument('--aug_blur_sigma_max', type=float, default=0.5, help='Gaussian blur maximum sigma')
+    parser.add_argument('--aug_erase_prob', type=float, default=0.1, help='Probability for random erasing (cutout-like augmentation)')
+    parser.add_argument('--aug_erase_scale_min', type=float, default=0.01, help='Random erasing minimum erased area ratio')
+    parser.add_argument('--aug_erase_scale_max', type=float, default=0.08, help='Random erasing maximum erased area ratio')
+    parser.add_argument('--aug_erase_ratio_min', type=float, default=0.3, help='Random erasing minimum aspect ratio')
+    parser.add_argument('--aug_erase_ratio_max', type=float, default=3.3, help='Random erasing maximum aspect ratio')
+    parser.add_argument('--aug_erase_random_value', action="store_true", help='Use random fill value for random erasing')
     parser.add_argument('--z_dim', type=int, default=128, help='The size of latent dimension')
     parser.add_argument('--G_h_size', type=int, default=128, help='The size of hidden state in generator')
     parser.add_argument('--D_h_size', type=int, default=128, help='The size of hidden state in discriminator')
     parser.add_argument('--SELU', dest='SELU', type=lambda x: bool(strtobool(x)), help='Whether to use SELU activation function instead of batch normalization and ReLU')
     parser.add_argument('--spectral_D', dest='spectral_D', type=lambda x: bool(strtobool(x)), help='Whether to use spectral normalization in discriminator')
     parser.add_argument('--no_batch_norm', dest='no_batch_norm', type=lambda x: bool(strtobool(x)), help='Whether to use batch normalization in discriminator')
+    parser.add_argument('--cfm_model_channels', type=int, default=128, help='Base channel width for CFM ADM U-Net')
+    parser.add_argument('--cfm_num_res_blocks', type=int, default=2, help='Number of ResBlocks per level in CFM ADM U-Net')
+    parser.add_argument('--cfm_cond_dim', type=int, default=512, help='Shared conditioning hidden dimension for timestep and condition')
+    parser.add_argument('--cfm_dropout', type=float, default=0.0, help='Dropout in CFM ADM ResBlocks')
+    parser.add_argument('--cfm_ode_steps', type=int, default=20, help='ODE integration steps for CFM inference during validation')
+    parser.add_argument('--cfm_solver', type=str, default="heun", choices=["heun", "euler"], help='ODE solver for CFM sampling')
+    parser.add_argument('--lr_schedule', type=str, default="constant", choices=["constant", "warmup_cosine"], help='Learning-rate schedule type')
+    parser.add_argument('--warmup_epochs', type=int, default=5, help='Warmup epochs for warmup_cosine schedule')
+    parser.add_argument('--min_lr_ratio', type=float, default=0.1, help='Final LR ratio for warmup_cosine schedule')
+    parser.add_argument('--overfit_single_sample', action="store_true", help='Use one sample repeatedly for overfit sanity check')
+    parser.add_argument('--overfit_sample_index', type=int, default=0, help='Sample index for overfit_single_sample')
+    parser.add_argument('--overfit_repeat_steps', type=int, default=32, help='Repeated steps per epoch in overfit_single_sample mode')
     
     return parser.parse_args()
 
@@ -73,14 +105,15 @@ def save_args(args):
 def set_dataset_args(args, train_dataloader):
     image, hidden_state, direction, exp, timestep, DI, info = next(iter(train_dataloader))
     if args.latent_conditioning:
+        args.condition_dim = hidden_state.shape[-1]
         if args.direction_conditioning:
-            args.condition_dim = direction.shape[-1] + hidden_state.shape[-1]
-        else:
-            args.condition_dim = hidden_state.shape[-1]
+            args.condition_dim += direction.shape[-1]
+        if args.include_di_conditioning:
+            args.condition_dim += DI.shape[-1]
     else:
+        args.condition_dim = info.shape[-1]
         if args.direction_conditioning:
-            args.condition_dim = info.shape[-1] + direction.shape[-1] + DI.shape[-1]
-        else:
-            args.condition_dim = info.shape[-1] + DI.shape[-1]    
+            args.condition_dim += direction.shape[-1]
+        args.condition_dim += DI.shape[-1]
 
     

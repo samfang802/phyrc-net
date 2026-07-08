@@ -191,7 +191,7 @@ Each run stores `args.json`, checkpoints, and logged artifacts.
 
 ## Notes
 
-- The diffusion-related files under `src/model/Component/diffusion/` import `ldm.*` modules (from latent-diffusion style code). These are not required for the default training pipelines above unless you explicitly use diffusion components.
+- Legacy latent-diffusion helper blocks under `src/model/Component/diffusion/` were removed during cleanup because they were not connected to the active training pipeline.
 - `argument/argument.py` and cross-validation training entrypoints were removed to reduce maintenance and keep a single primary training path.
 
 ## Citation

@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 
 
 from src.dataset import DamageIndexDataset
+from src.utils import REGRESSOR_CKPT_PATTERNS, resolve_checkpoint
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 from torchvision.transforms import v2
@@ -73,7 +74,8 @@ if __name__ == "__main__":
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
-    state_dict = torch.load(glob.glob(os.path.join(result_path, "**/best_*.ckpt"), recursive=True)[0])["state_dict"]
+    ckpt_path = resolve_checkpoint(result_path, REGRESSOR_CKPT_PATTERNS, "quantification checkpoint")
+    state_dict = torch.load(ckpt_path)["state_dict"]
     status = model.load_state_dict(state_dict)
     print(status)
     

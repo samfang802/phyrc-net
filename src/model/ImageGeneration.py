@@ -9,10 +9,36 @@ from matplotlib.lines import Line2D
 
 import torch
 from src.model.Component.generative import DCGAN_D, DCGAN_G, weights_init
+from src.model.Component.cfm_adm import ADMUNetCFM
 from torchmetrics.image.fid import FrechetInceptionDistance
 from torchmetrics.image import StructuralSimilarityIndexMeasure, PeakSignalNoiseRatio
 from torchvision.transforms import v2
 from sklearn.metrics import r2_score
+
+
+def build_generation_condition(
+    info,
+    hidden_state,
+    direction,
+    DI,
+    latent_conditioning,
+    direction_conditioning,
+    include_di_conditioning,
+):
+    if latent_conditioning:
+        parts = [hidden_state]
+        if direction_conditioning:
+            parts.append(direction)
+        if include_di_conditioning:
+            parts.append(DI)
+        return torch.cat(parts, dim=1)
+
+    parts = [info]
+    if direction_conditioning:
+        parts.append(direction)
+    parts.append(DI)
+    return torch.cat(parts, dim=1)
+
 
 class HystereticCGAN(pl.LightningModule):
     def __init__(self, architecture, loss_type, condition_dim, SELU, G_h_size, D_h_size, spectral_D, no_batch_norm, 
@@ -28,7 +54,12 @@ class HystereticCGAN(pl.LightningModule):
         self.result_dir = result_dir
         self.latent_conditioning = latent_conditioning
         self.direction_conditioning = direction_conditioning
+        self.include_di_conditioning = kwargs.get("include_di_conditioning", False)
         self.add_DI_loss = add_DI_loss
+        self.lr_schedule = kwargs.get("lr_schedule", "constant")
+        self.warmup_epochs = kwargs.get("warmup_epochs", 5)
+        self.min_lr_ratio = kwargs.get("min_lr_ratio", 0.1)
+        self.total_epochs = kwargs.get("epoch", 10) + 1
         
         
         
@@ -80,17 +111,15 @@ class HystereticCGAN(pl.LightningModule):
 
     
     def process_condition(self, info, hidden_state, direction, DI):
-        if self.latent_conditioning:
-            if self.direction_conditioning:
-                condition = torch.cat([hidden_state, direction], dim=1) 
-            else:
-                condition = torch.cat([hidden_state], dim=1) 
-        else:
-            if self.direction_conditioning:
-                condition = torch.cat([info, direction, DI], dim=1)
-            else:
-                condition = torch.cat([info, DI], dim=1)
-        return condition
+        return build_generation_condition(
+            info,
+            hidden_state,
+            direction,
+            DI,
+            self.latent_conditioning,
+            self.direction_conditioning,
+            self.include_di_conditioning,
+        )
         
     
     def training_step(self, batch):
@@ -228,8 +257,21 @@ class HystereticCGAN(pl.LightningModule):
         lr_D = self.lr
         opt_G = torch.optim.Adam(self.G.parameters(), lr=lr_G)
         opt_D = torch.optim.Adam(self.D.parameters(), lr=lr_D)
-        
-        return [opt_G, opt_D]
+
+        if self.lr_schedule != "warmup_cosine":
+            return [opt_G, opt_D]
+
+        def lr_lambda(epoch_idx):
+            if self.warmup_epochs > 0 and epoch_idx < self.warmup_epochs:
+                return float(epoch_idx + 1) / float(self.warmup_epochs)
+            remain = max(self.total_epochs - self.warmup_epochs, 1)
+            progress = min(max((epoch_idx - self.warmup_epochs) / remain, 0.0), 1.0)
+            cosine = 0.5 * (1.0 + np.cos(np.pi * progress))
+            return self.min_lr_ratio + (1.0 - self.min_lr_ratio) * cosine
+
+        sch_G = torch.optim.lr_scheduler.LambdaLR(opt_G, lr_lambda=lr_lambda)
+        sch_D = torch.optim.lr_scheduler.LambdaLR(opt_D, lr_lambda=lr_lambda)
+        return [opt_G, opt_D], [sch_G, sch_D]
     
     
     def on_train_epoch_end(self):
@@ -347,6 +389,190 @@ class HystereticCGAN(pl.LightningModule):
         
 
         
+class CFMADM(pl.LightningModule):
+    def __init__(
+        self,
+        architecture,
+        condition_dim,
+        image_size,
+        lr,
+        result_dir,
+        latent_conditioning,
+        direction_conditioning,
+        add_DI_loss,
+        cfm_model_channels,
+        cfm_num_res_blocks,
+        cfm_cond_dim,
+        cfm_dropout,
+        cfm_ode_steps,
+        cfm_solver,
+        **kwargs,
+    ):
+        super().__init__()
+        self.save_hyperparameters(ignore=["kwargs", "result_dir"])
+        self.condition_dim = condition_dim
+        self.image_size = image_size
+        self.lr = lr
+        self.result_dir = result_dir
+        self.latent_conditioning = latent_conditioning
+        self.direction_conditioning = direction_conditioning
+        self.include_di_conditioning = kwargs.get("include_di_conditioning", False)
+        self.add_DI_loss = add_DI_loss
+        self.cfm_ode_steps = cfm_ode_steps
+        self.cfm_solver = cfm_solver.lower()
+        self.lr_schedule = kwargs.get("lr_schedule", "constant")
+        self.warmup_epochs = kwargs.get("warmup_epochs", 5)
+        self.min_lr_ratio = kwargs.get("min_lr_ratio", 0.1)
+        self.total_epochs = kwargs.get("epoch", 10) + 1
+
+        self.velocity_net = ADMUNetCFM(
+            in_channels=3,
+            out_channels=3,
+            model_channels=cfm_model_channels,
+            channel_mult=(1, 2, 4, 4),
+            num_res_blocks=cfm_num_res_blocks,
+            cond_dim=cfm_cond_dim,
+            latent_dim=condition_dim,
+            dropout=cfm_dropout,
+            use_mid_attention=True,
+        )
+
+        self.psnr = PeakSignalNoiseRatio()
+        self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0)
+        self.fid = FrechetInceptionDistance(feature=2048, reset_real_features=False, normalize=True)
+        self.validation_outputs = {"gt_DI": [], "pred_DI": []}
+
+        self.regressor = kwargs.get("regressor", None)
+        if self.add_DI_loss:
+            if self.regressor is None:
+                raise ValueError("CFMADM with --add_DI_loss requires a loaded regressor.")
+            self.custom_transform = v2.Compose([
+                v2.Resize((224, 224)),
+                v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ])
+
+    def on_train_epoch_start(self):
+        self.log("Learning rate", self.trainer.optimizers[0].param_groups[0]["lr"])
+
+    def process_condition(self, info, hidden_state, direction, DI):
+        return build_generation_condition(
+            info,
+            hidden_state,
+            direction,
+            DI,
+            self.latent_conditioning,
+            self.direction_conditioning,
+            self.include_di_conditioning,
+        )
+
+    def flow_matching_loss(self, z1, c):
+        b = z1.shape[0]
+        t = torch.rand(b, device=z1.device)
+        z0 = torch.randn_like(z1)
+        zt = (1.0 - t[:, None, None, None]) * z0 + t[:, None, None, None] * z1
+        target_u = z1 - z0
+        pred_v = self.velocity_net(zt, t, c)
+        return torch.mean((pred_v - target_u) ** 2)
+
+    def sample_with_ode(self, c, z0=None, num_steps=None):
+        # Separate ODE solver from training objective.
+        if num_steps is None:
+            num_steps = self.cfm_ode_steps
+        if z0 is None:
+            z = torch.randn((c.shape[0], 3, self.image_size, self.image_size), device=c.device)
+        else:
+            z = z0
+        dt = 1.0 / float(num_steps)
+        for i in range(num_steps):
+            t_scalar = float(i) / float(num_steps)
+            t = torch.full((c.shape[0],), t_scalar, device=c.device)
+            v_t = self.velocity_net(z, t, c)
+            if self.cfm_solver == "heun":
+                z_pred = z + dt * v_t
+                t_next_scalar = float(i + 1) / float(num_steps)
+                t_next = torch.full((c.shape[0],), t_next_scalar, device=c.device)
+                v_next = self.velocity_net(z_pred, t_next, c)
+                z = z + 0.5 * dt * (v_t + v_next)
+            else:
+                z = z + dt * v_t
+        return z
+
+    def training_step(self, batch, batch_idx):
+        real_data, hidden_state, direction, exp, timestep, DI, info = batch
+        c = self.process_condition(info, hidden_state, direction, DI)
+        loss_fm = self.flow_matching_loss(real_data, c)
+
+        if self.add_DI_loss:
+            sampled = self.sample_with_ode(c)
+            sampled_vis = torch.clamp(sampled * 0.5 + 0.5, 0.0, 1.0)
+            sampled_trans = self.custom_transform(sampled_vis)
+            pred_di = self.regressor(sampled_trans, info)
+            loss_di = nn.MSELoss()(pred_di, DI)
+            loss = loss_fm + loss_di
+            self.log("train/errDI", loss_di, prog_bar=False, on_step=False, on_epoch=True)
+        else:
+            loss = loss_fm
+
+        self.log("train/loss", loss, prog_bar=True, on_step=False, on_epoch=True)
+        self.log("train/fm_loss", loss_fm, prog_bar=False, on_step=False, on_epoch=True)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        real_data, hidden_state, direction, exp, timestep, DI, info = batch
+        c = self.process_condition(info, hidden_state, direction, DI)
+
+        val_fm_loss = self.flow_matching_loss(real_data, c)
+        sampled = self.sample_with_ode(c)
+
+        real_vis = torch.clamp(real_data * 0.5 + 0.5, 0.0, 1.0)
+        sampled_vis = torch.clamp(sampled * 0.5 + 0.5, 0.0, 1.0)
+        self.psnr.update(sampled_vis, real_vis)
+        self.ssim.update(sampled_vis, real_vis)
+        self.fid.update(sampled_vis, real=False)
+        self.fid.update(real_vis, real=True)
+
+        if self.add_DI_loss:
+            sampled_trans = self.custom_transform(sampled_vis)
+            pred_di = self.regressor(sampled_trans, info)
+            self.validation_outputs["pred_DI"].append(pred_di.detach())
+            self.validation_outputs["gt_DI"].append(DI.detach())
+
+        self.log("val/loss", val_fm_loss, prog_bar=False, on_step=False, on_epoch=True)
+
+    def on_validation_epoch_end(self):
+        psnr = self.psnr.compute()
+        ssim = self.ssim.compute()
+        fid = self.fid.compute()
+        self.log("val/psnr", psnr)
+        self.log("val/ssim", ssim)
+        self.log("val/fid", fid)
+        self.psnr.reset()
+        self.ssim.reset()
+        self.fid.reset()
+
+        if self.add_DI_loss and len(self.validation_outputs["gt_DI"]) > 0:
+            gt = torch.concatenate(self.validation_outputs["gt_DI"]).cpu().numpy()
+            prediction = torch.concatenate(self.validation_outputs["pred_DI"]).cpu().numpy()
+            self.log("val/r2", r2_score(gt, prediction))
+            self.validation_outputs = {"gt_DI": [], "pred_DI": []}
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.AdamW(self.velocity_net.parameters(), lr=self.lr)
+        if self.lr_schedule != "warmup_cosine":
+            return optimizer
+
+        def lr_lambda(epoch_idx):
+            if self.warmup_epochs > 0 and epoch_idx < self.warmup_epochs:
+                return float(epoch_idx + 1) / float(self.warmup_epochs)
+            remain = max(self.total_epochs - self.warmup_epochs, 1)
+            progress = min(max((epoch_idx - self.warmup_epochs) / remain, 0.0), 1.0)
+            cosine = 0.5 * (1.0 + np.cos(np.pi * progress))
+            return self.min_lr_ratio + (1.0 - self.min_lr_ratio) * cosine
+
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+        return [optimizer], [scheduler]
+
+
 class Baseline(pl.LightningModule):
     def __init__(self, architecture, loss_type, condition_dim, G_h_size, 
                 image_size, lr, result_dir, latent_conditioning, 
@@ -359,6 +585,12 @@ class Baseline(pl.LightningModule):
         self.lr = lr
         self.result_dir = result_dir
         self.latent_conditioning = latent_conditioning
+        self.direction_conditioning = kwargs.get("direction_conditioning", True)
+        self.include_di_conditioning = kwargs.get("include_di_conditioning", False)
+        self.lr_schedule = kwargs.get("lr_schedule", "constant")
+        self.warmup_epochs = kwargs.get("warmup_epochs", 5)
+        self.min_lr_ratio = kwargs.get("min_lr_ratio", 0.1)
+        self.total_epochs = kwargs.get("epoch", 10) + 1
         
         
         self.training_outputs = {"errG":[]}
@@ -393,11 +625,15 @@ class Baseline(pl.LightningModule):
 
     
     def process_condition(self, info, hidden_state, direction, DI):
-        if self.latent_conditioning:
-            condition = torch.cat([hidden_state, direction], dim=1)
-        else:
-            condition = torch.cat([info, direction, DI], dim=1)
-        return condition
+        return build_generation_condition(
+            info,
+            hidden_state,
+            direction,
+            DI,
+            self.latent_conditioning,
+            self.direction_conditioning,
+            self.include_di_conditioning,
+        )
         
     
     def training_step(self, batch):
@@ -448,8 +684,20 @@ class Baseline(pl.LightningModule):
     def configure_optimizers(self):
         lr_G = self.lr
         opt_G = torch.optim.Adam(self.G.parameters(), lr=lr_G)
-        
-        return opt_G
+
+        if self.lr_schedule != "warmup_cosine":
+            return opt_G
+
+        def lr_lambda(epoch_idx):
+            if self.warmup_epochs > 0 and epoch_idx < self.warmup_epochs:
+                return float(epoch_idx + 1) / float(self.warmup_epochs)
+            remain = max(self.total_epochs - self.warmup_epochs, 1)
+            progress = min(max((epoch_idx - self.warmup_epochs) / remain, 0.0), 1.0)
+            cosine = 0.5 * (1.0 + np.cos(np.pi * progress))
+            return self.min_lr_ratio + (1.0 - self.min_lr_ratio) * cosine
+
+        scheduler = torch.optim.lr_scheduler.LambdaLR(opt_G, lr_lambda=lr_lambda)
+        return [opt_G], [scheduler]
     
     
     def on_train_epoch_end(self):
