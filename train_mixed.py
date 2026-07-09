@@ -20,23 +20,6 @@ def _load_args_from_result_dir(result_dir):
     return argparse.Namespace(**json.load(open(args_path, "r")))
 
 
-class RepeatSingleSampleDataset(torch.utils.data.Dataset):
-    def __init__(self, base_dataset, sample_index=0, repeats=32):
-        self.base_dataset = base_dataset
-        self.sample_index = sample_index
-        self.repeats = repeats
-        if not (0 <= self.sample_index < len(base_dataset)):
-            raise IndexError(f"overfit sample index {sample_index} out of range [0, {len(base_dataset) - 1}]")
-        # Keep compatibility with logging code that accesses dataset.hysteresis
-        self.hysteresis = getattr(base_dataset, "hysteresis", {})
-
-    def __len__(self):
-        return self.repeats
-
-    def __getitem__(self, idx):
-        return self.base_dataset[self.sample_index]
-
-
 
 if __name__ == "__main__":
     current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -70,7 +53,7 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     extractor = extractor.to(device)
     extractor_ckpt = _resolve_required_match(os.path.join(extractor_path, "**/best.ckpt"), "extractor checkpoint")
-    state_dict = torch.load(extractor_ckpt, map_location=device)["state_dict"]
+    state_dict = torch.load(extractor_ckpt, map_location=device, weights_only=False)["state_dict"]
     status = extractor.load_state_dict(state_dict)
     extractor.eval()
     for p in extractor.parameters():
@@ -82,33 +65,10 @@ if __name__ == "__main__":
     train_ds = PatternLoopDataset(root="./Data", mode="train", transform=transform, extractor=extractor, extractor_args=extractor_args, **vars(args))
     val_ds = PatternLoopDataset(root="./Data", mode="val", transform=transform, extractor=extractor, extractor_args=extractor_args, **vars(args))
 
-    if args.overfit_single_sample:
-        base_train_ds = train_ds
-        train_ds = RepeatSingleSampleDataset(
-            base_train_ds,
-            sample_index=args.overfit_sample_index,
-            repeats=args.overfit_repeat_steps,
-        )
-        val_index = args.overfit_sample_index if args.overfit_sample_index < len(base_train_ds) else 0
-        val_ds = RepeatSingleSampleDataset(
-            base_train_ds,
-            sample_index=val_index,
-            repeats=max(1, args.overfit_repeat_steps // 4),
-        )
-        try:
-            overfit_filename = base_train_ds.label.iloc[val_index]["filename"]
-            print(f"[Overfit mode] train/val use same filename: {overfit_filename}")
-        except Exception:
-            pass
-        print(
-            f"[Overfit mode] using one sample only: train_idx={args.overfit_sample_index}, "
-            f"train_repeats={len(train_ds)}, val_repeats={len(val_ds)}"
-        )
-
     train_dataloader = DataLoader(
         train_ds,
         batch_size=args.batch_size,
-        shuffle=not args.overfit_single_sample,
+        shuffle=True,
         num_workers=num_workers,
     )
     val_dataloader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=num_workers)
@@ -122,7 +82,7 @@ if __name__ == "__main__":
         regressor_args = _load_args_from_result_dir(regressor_path)
         regressor = importlib.import_module(f"src.model.DamageQuantification").__dict__["DamageQuantification"](**vars(regressor_args))
         regressor_ckpt = _resolve_required_match(os.path.join(regressor_path, "**/best_*.ckpt"), "regressor checkpoint")
-        state_dict = torch.load(regressor_ckpt, map_location=device)["state_dict"]
+        state_dict = torch.load(regressor_ckpt, map_location=device, weights_only=False)["state_dict"]
         status = regressor.load_state_dict(state_dict)
         regressor = regressor.to(device)
         regressor.eval()
@@ -159,7 +119,7 @@ if __name__ == "__main__":
         devices = 1,
         logger = logger,
         log_every_n_steps=2,
-        check_val_every_n_epoch=100, 
+        check_val_every_n_epoch=args.val_every_n_epoch,
         max_epochs = args.epoch + 1,
         num_sanity_val_steps=len(val_dataloader),
         callbacks = callback_list

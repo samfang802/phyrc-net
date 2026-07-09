@@ -79,9 +79,9 @@ def parse_args():
     parser.add_argument('--lr_schedule', type=str, default="constant", choices=["constant", "warmup_cosine"], help='Learning-rate schedule type')
     parser.add_argument('--warmup_epochs', type=int, default=5, help='Warmup epochs for warmup_cosine schedule')
     parser.add_argument('--min_lr_ratio', type=float, default=0.1, help='Final LR ratio for warmup_cosine schedule')
-    parser.add_argument('--overfit_single_sample', action="store_true", help='Use one sample repeatedly for overfit sanity check')
-    parser.add_argument('--overfit_sample_index', type=int, default=0, help='Sample index for overfit_single_sample')
-    parser.add_argument('--overfit_repeat_steps', type=int, default=32, help='Repeated steps per epoch in overfit_single_sample mode')
+    parser.add_argument('--val_every_n_epoch', type=int, default=10, help='Run validation every N epochs')
+    parser.add_argument('--inference_every_n_epochs', type=int, default=10, help='Save/log multi-sample CFM inference images every N epochs')
+    parser.add_argument('--inference_num_images', type=int, default=6, help='Number of inference samples to visualize per logging epoch')
     
     return parser.parse_args()
 

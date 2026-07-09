@@ -1,4 +1,5 @@
 import wandb
+import os
 import numpy as np
 import torch.nn as nn
 import lightning.pytorch as pl
@@ -424,6 +425,8 @@ class CFMADM(pl.LightningModule):
         self.warmup_epochs = kwargs.get("warmup_epochs", 5)
         self.min_lr_ratio = kwargs.get("min_lr_ratio", 0.1)
         self.total_epochs = kwargs.get("epoch", 10) + 1
+        self.inference_every_n_epochs = max(1, int(kwargs.get("inference_every_n_epochs", 10)))
+        self.inference_num_images = max(1, int(kwargs.get("inference_num_images", 6)))
 
         self.velocity_net = ADMUNetCFM(
             in_channels=3,
@@ -440,7 +443,7 @@ class CFMADM(pl.LightningModule):
         self.psnr = PeakSignalNoiseRatio(data_range=1.0)
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0)
         self.fid = FrechetInceptionDistance(feature=2048, reset_real_features=False, normalize=True)
-        self.validation_outputs = {"gt_DI": [], "pred_DI": []}
+        self.validation_outputs = {"gt_DI": [], "pred_DI": [], "samples": []}
 
         self.regressor = kwargs.get("regressor", None)
         if self.add_DI_loss:
@@ -531,6 +534,19 @@ class CFMADM(pl.LightningModule):
         self.fid.update(sampled_vis, real=False)
         self.fid.update(real_vis, real=True)
 
+        if len(self.validation_outputs["samples"]) < self.inference_num_images:
+            max_store = self.inference_num_images - len(self.validation_outputs["samples"])
+            batch_store = min(max_store, sampled_vis.shape[0])
+            for i in range(batch_store):
+                self.validation_outputs["samples"].append(
+                    {
+                        "real": real_vis[i].detach().cpu(),
+                        "pred": sampled_vis[i].detach().cpu(),
+                        "exp": exp[i] if isinstance(exp, (list, tuple)) else exp,
+                        "timestep": int(timestep[i].item()) if torch.is_tensor(timestep[i]) else int(timestep[i]),
+                    }
+                )
+
         if self.add_DI_loss:
             sampled_trans = self.custom_transform(sampled_vis)
             pred_di = self.regressor(sampled_trans, info)
@@ -550,11 +566,37 @@ class CFMADM(pl.LightningModule):
         self.ssim.reset()
         self.fid.reset()
 
+        if (self.current_epoch % self.inference_every_n_epochs == 0) and len(self.validation_outputs["samples"]) > 0:
+            rows = len(self.validation_outputs["samples"])
+            fig, axes = plt.subplots(rows, 2, figsize=(8, max(3, rows * 2.5)))
+            if rows == 1:
+                axes = np.array([axes])
+            for i, sample in enumerate(self.validation_outputs["samples"]):
+                real_img = sample["real"].permute(1, 2, 0).numpy()
+                pred_img = sample["pred"].permute(1, 2, 0).numpy()
+                axes[i, 0].imshow(real_img)
+                axes[i, 0].set_title(f"GT | {sample['exp']} | t={sample['timestep']}")
+                axes[i, 0].axis("off")
+                axes[i, 1].imshow(pred_img)
+                axes[i, 1].set_title("Inference")
+                axes[i, 1].axis("off")
+            fig.suptitle(f"CFM Inference Samples - Epoch {self.current_epoch:05d}")
+            plt.tight_layout()
+
+            save_dir = os.path.join(self.result_dir, "inference_samples")
+            os.makedirs(save_dir, exist_ok=True)
+            fig_path = os.path.join(save_dir, f"epoch_{self.current_epoch:05d}.png")
+            fig.savefig(fig_path, dpi=150, bbox_inches="tight")
+            print(f"[CFM] Saved inference samples: {fig_path}")
+            if wandb.run is not None:
+                wandb.log({f"CFM/Inference Epoch {self.current_epoch:05d}": wandb.Image(fig)})
+            plt.close(fig)
+
         if self.add_DI_loss and len(self.validation_outputs["gt_DI"]) > 0:
             gt = torch.concatenate(self.validation_outputs["gt_DI"]).cpu().numpy()
             prediction = torch.concatenate(self.validation_outputs["pred_DI"]).cpu().numpy()
             self.log("val/r2", r2_score(gt, prediction))
-            self.validation_outputs = {"gt_DI": [], "pred_DI": []}
+        self.validation_outputs = {"gt_DI": [], "pred_DI": [], "samples": []}
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.velocity_net.parameters(), lr=self.lr)

@@ -31,7 +31,7 @@ The generative backend is migrated from adversarial training to **Conditional Fl
   - $Z_1$: target damage image
   - $Z_t = (1-t)Z_0 + tZ_1$
   - $u_t = Z_1 - Z_0$
-  - Minimize $\mathbb{E}\|v_\theta(Z_t, t, c) - u_t\|^2$
+  - Minimize $\mathbb{E}v_\theta(Z_t, t, c) - u_t^2$
 - Conditioning path:
   - timestep embedding (sinusoidal) + condition embedding projected into shared latent space
   - injected into residual blocks using **adaGN** (scale-shift modulation)
@@ -95,8 +95,8 @@ Implementation-level condition examples:
 
 Training prioritizes flow-matching velocity supervision while optionally combining auxiliary terms (e.g., DI-related consistency) via adaptive or scheduled weighting:
 
-- Main objective: $\mathcal{L}_{FM} = \|v_\theta(Z_t, t, c) - (Z_1 - Z_0)\|_2^2$
-- Optional composite form: $\mathcal{L} = \lambda_{fm}\mathcal{L}_{FM} + \lambda_{aux}\mathcal{L}_{aux}$
+- Main objective: $\mathcal{L}*{FM} = v*\theta(Z_t, t, c) - (Z_1 - Z_0)_2^2$
+- Optional composite form: $\mathcal{L} = \lambda_{fm}\mathcal{L}*{FM} + \lambda*{aux}\mathcal{L}_{aux}$
 
 Weighting can be ramped or normalized to prevent domination by high-variance auxiliary losses.
 

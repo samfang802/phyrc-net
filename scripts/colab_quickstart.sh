@@ -5,7 +5,7 @@ set -euo pipefail
 # Examples:
 #   bash scripts/colab_quickstart.sh
 #   bash scripts/colab_quickstart.sh --with-wandb --backend cfm
-#   bash scripts/colab_quickstart.sh --mode overfit
+#   bash scripts/colab_quickstart.sh --mode full
 
 WITH_WANDB=0
 MODE="smoke"
@@ -38,7 +38,7 @@ AUTHOR_REGRESSOR="results/DamageQuantification/vit_b_16/2024-06-12_14-01-03"
 EPOCH_STAGE1=5
 EPOCH_STAGE2=5
 EPOCH_STAGE3=5
-if [[ "$MODE" == "overfit" ]]; then
+if [[ "$MODE" == "full" ]]; then
   EPOCH_STAGE3=100
 fi
 
@@ -75,12 +75,6 @@ else
   CFM_ARGS="--architecture HystereticCGAN --loss_type SGAN --z_dim 100 --G_h_size 128 --D_h_size 128 --SELU False --spectral_D False --no_batch_norm False"
 fi
 
-OVERFIT_ARGS=""
-if [[ "$MODE" == "overfit" ]]; then
-  echo "Overfit mode: training Stage 3 on one sample for 100 epochs."
-  OVERFIT_ARGS="--overfit_single_sample --overfit_sample_index 0 --overfit_repeat_steps 32"
-fi
-
 python train_mixed.py \
   ${CFM_ARGS} \
   --extractor_path "${EXTRACTOR_PATH}" \
@@ -90,9 +84,11 @@ python train_mixed.py \
   --add_DI_loss False \
   --image_size 128 \
   --epoch ${EPOCH_STAGE3} \
+  --val_every_n_epoch 10 \
+  --inference_every_n_epochs 10 \
+  --inference_num_images 6 \
   --batch_size 4 \
   --num_workers 1 \
-  ${OVERFIT_ARGS} \
   ${WANDB_FLAG}
 
 echo "Done."
