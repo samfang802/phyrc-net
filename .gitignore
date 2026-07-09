@@ -11,3 +11,5 @@ job.sh
 /notebook
 /generation
 draw.ipynb
+best.ckpt
+phase1_extractor/
