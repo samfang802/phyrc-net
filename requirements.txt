@@ -17,3 +17,6 @@ natsort>=8.4
 requests>=2.31
 imageio>=2.34
 hysteresis>=2.0
+transformers>=4.44
+huggingface_hub>=0.24
+diffusers>=0.30
