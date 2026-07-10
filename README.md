@@ -23,15 +23,19 @@ intership-project/
 |  |- model/
 |  |  |- HystereticPrediction.py    # LSTM/GRU models
 |  |  |- DamageQuantification.py    # DI regression model
-|  |  |- ImageGeneration.py         # Conditional GAN models
+|  |  |- ImageGeneration.py         # Conditional GAN + CFM/ADM (pixel + SD3 latent)
 |  |  |- ImageReconstruction.py     # VQGAN/VAE models
 |  |  |- Component/                 # Shared building blocks
 |  |- losses/                       # Perceptual/adversarial losses
+|- scripts/                         # Validation and Colab helper scripts
+|  |- dinov3_attention_fdd_validation.py
+|- colab_minimal_pipeline.ipynb     # End-to-end Colab workflow
 |- train_hysteresis.py
 |- train_quantification.py
 |- train_mixed.py
 |- train_reconstruction.py
 |- test_*.py / eval_mixed.py        # Inference and evaluation scripts
+|- ARCHITECTURE_UPDATE_V3.md / ARCHITECTURE_UPDATE_V4.md
 ```
 
 ## Environment Setup
@@ -136,6 +140,23 @@ python train_mixed.py \
   --add_DI_loss true \
   --image_size 128 \
   --epoch 3000
+```
+
+CFMADM can run in SD3 VAE latent space (V4):
+
+```bash
+python train_mixed.py \
+  --architecture CFMADM \
+  --use_sd3_vae_latent true \
+  --sd3_vae_model_id stabilityai/stable-diffusion-3-medium-diffusers \
+  --sd3_vae_subfolder vae \
+  --sd3_vae_use_fp16 true \
+  --extractor_path ./results/HystereticPrediction/HystereticGRU/<run_id> \
+  --data_path id_list.json \
+  --latent_conditioning true \
+  --direction_conditioning true \
+  --include_di_conditioning true \
+  --epoch 1000
 ```
 
 ### 4) Train Image Reconstruction (VQGAN / VAE)

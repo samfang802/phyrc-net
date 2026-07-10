@@ -15,6 +15,12 @@ from torchmetrics.image.fid import FrechetInceptionDistance
 from torchmetrics.image import StructuralSimilarityIndexMeasure, PeakSignalNoiseRatio
 from torchvision.transforms import v2
 from sklearn.metrics import r2_score
+from contextlib import nullcontext
+
+try:
+    from diffusers import AutoencoderKL
+except ImportError:
+    AutoencoderKL = None
 
 
 def build_generation_condition(
@@ -427,10 +433,54 @@ class CFMADM(pl.LightningModule):
         self.total_epochs = kwargs.get("epoch", 10) + 1
         self.inference_every_n_epochs = max(1, int(kwargs.get("inference_every_n_epochs", 10)))
         self.inference_num_images = max(1, int(kwargs.get("inference_num_images", 6)))
+        self.use_sd3_vae_latent = kwargs.get("use_sd3_vae_latent", False)
+        self.sd3_vae_model_id = kwargs.get("sd3_vae_model_id", "stabilityai/stable-diffusion-3-medium-diffusers")
+        self.sd3_vae_subfolder = kwargs.get("sd3_vae_subfolder", "vae")
+        self.sd3_vae_use_fp16 = kwargs.get("sd3_vae_use_fp16", True)
+
+        self.vae = None
+        self.vae_scaling_factor = 1.0
+        self.vae_shift_factor = 0.0
+        self.model_in_channels = 3
+        self.model_spatial_size = self.image_size
+        self.vae_downsample_factor = 1
+
+        if self.use_sd3_vae_latent:
+            if AutoencoderKL is None:
+                raise ImportError(
+                    "diffusers is required for --use_sd3_vae_latent. "
+                    "Please install it with: pip install diffusers transformers"
+                )
+
+            vae_dtype = torch.float16 if (torch.cuda.is_available() and self.sd3_vae_use_fp16) else torch.float32
+            self.vae = AutoencoderKL.from_pretrained(
+                self.sd3_vae_model_id,
+                subfolder=self.sd3_vae_subfolder,
+                torch_dtype=vae_dtype,
+            )
+            self.vae.eval()
+            for p in self.vae.parameters():
+                p.requires_grad = False
+
+            self.vae_scaling_factor = float(getattr(self.vae.config, "scaling_factor", 1.0))
+            self.vae_shift_factor = float(getattr(self.vae.config, "shift_factor", 0.0))
+            self.model_in_channels = int(getattr(self.vae.config, "latent_channels", 16))
+            self.vae_downsample_factor = int(
+                getattr(
+                    self.vae.config,
+                    "vae_scale_factor",
+                    2 ** len(getattr(self.vae.config, "block_out_channels", [1, 1, 1, 1])),
+                )
+            )
+            if self.image_size % self.vae_downsample_factor != 0:
+                raise ValueError(
+                    f"image_size={self.image_size} is not divisible by VAE downsample factor={self.vae_downsample_factor}"
+                )
+            self.model_spatial_size = self.image_size // self.vae_downsample_factor
 
         self.velocity_net = ADMUNetCFM(
-            in_channels=3,
-            out_channels=3,
+            in_channels=self.model_in_channels,
+            out_channels=self.model_in_channels,
             model_channels=cfm_model_channels,
             channel_mult=(1, 2, 4, 4),
             num_res_blocks=cfm_num_res_blocks,
@@ -453,6 +503,33 @@ class CFMADM(pl.LightningModule):
                 v2.Resize((224, 224)),
                 v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ])
+
+    def _vae_context(self):
+        if self.vae is None:
+            return nullcontext()
+        vae_dtype = next(self.vae.parameters()).dtype
+        if self.device.type == "cuda" and vae_dtype == torch.float16:
+            return torch.autocast(device_type="cuda", dtype=torch.float16)
+        return nullcontext()
+
+    def _encode_to_target_space(self, image_tensor):
+        if self.vae is None:
+            return image_tensor
+        with torch.no_grad():
+            with self._vae_context():
+                posterior = self.vae.encode(image_tensor).latent_dist
+                latent = posterior.mean
+                latent = (latent - self.vae_shift_factor) * self.vae_scaling_factor
+        return latent.float()
+
+    def _decode_from_target_space(self, target_tensor):
+        if self.vae is None:
+            return target_tensor
+        with torch.no_grad():
+            with self._vae_context():
+                model_input = target_tensor / self.vae_scaling_factor + self.vae_shift_factor
+                decoded = self.vae.decode(model_input.to(next(self.vae.parameters()).dtype)).sample
+        return decoded.float()
 
     def on_train_epoch_start(self):
         self.log("Learning rate", self.trainer.optimizers[0].param_groups[0]["lr"])
@@ -482,7 +559,10 @@ class CFMADM(pl.LightningModule):
         if num_steps is None:
             num_steps = self.cfm_ode_steps
         if z0 is None:
-            z = torch.randn((c.shape[0], 3, self.image_size, self.image_size), device=c.device)
+            z = torch.randn(
+                (c.shape[0], self.model_in_channels, self.model_spatial_size, self.model_spatial_size),
+                device=c.device,
+            )
         else:
             z = z0
         dt = 1.0 / float(num_steps)
@@ -503,11 +583,13 @@ class CFMADM(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         real_data, hidden_state, direction, exp, timestep, DI, info = batch
         c = self.process_condition(info, hidden_state, direction, DI)
-        loss_fm = self.flow_matching_loss(real_data, c)
+        target_space_data = self._encode_to_target_space(real_data)
+        loss_fm = self.flow_matching_loss(target_space_data, c)
 
         if self.add_DI_loss:
             sampled = self.sample_with_ode(c)
-            sampled_vis = torch.clamp(sampled * 0.5 + 0.5, 0.0, 1.0)
+            sampled_image = self._decode_from_target_space(sampled)
+            sampled_vis = torch.clamp(sampled_image * 0.5 + 0.5, 0.0, 1.0)
             sampled_trans = self.custom_transform(sampled_vis)
             pred_di = self.regressor(sampled_trans, info)
             loss_di = nn.MSELoss()(pred_di, DI)
@@ -524,11 +606,13 @@ class CFMADM(pl.LightningModule):
         real_data, hidden_state, direction, exp, timestep, DI, info = batch
         c = self.process_condition(info, hidden_state, direction, DI)
 
-        val_fm_loss = self.flow_matching_loss(real_data, c)
+        target_space_data = self._encode_to_target_space(real_data)
+        val_fm_loss = self.flow_matching_loss(target_space_data, c)
         sampled = self.sample_with_ode(c)
+        sampled_image = self._decode_from_target_space(sampled)
 
         real_vis = torch.clamp(real_data * 0.5 + 0.5, 0.0, 1.0)
-        sampled_vis = torch.clamp(sampled * 0.5 + 0.5, 0.0, 1.0)
+        sampled_vis = torch.clamp(sampled_image * 0.5 + 0.5, 0.0, 1.0)
         self.psnr.update(sampled_vis, real_vis)
         self.ssim.update(sampled_vis, real_vis)
         self.fid.update(sampled_vis, real=False)
