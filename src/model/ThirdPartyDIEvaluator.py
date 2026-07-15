@@ -36,8 +36,10 @@ class InterferenceMaskedDIEvaluator(nn.Module):
         detector_model_id: Hugging Face Grounding DINO model identifier.
         dino: Already-loaded DINOv3 Vision Transformer.
         dino_processor: The processor paired with the supplied DINOv3 model.
-        box_threshold: Minimum Grounding DINO confidence for an interference box.
-        text_threshold: Minimum token-to-text confidence for a box.
+        box_threshold: Minimum Grounding DINO query confidence for an interference box.
+        text_threshold: Minimum prompt-token confidence for an interference box.
+        max_interference_area_ratio: Reject boxes larger than this fraction of
+            the source image. Interference objects should not cover a column.
         freeze_dino: Freeze DINO features while training only ``di_predictor``.
         di_predictor: A trained ``nn.Module`` mapping pooled DINO features to
             ``[batch, 1]`` DI. If omitted, a new MLP is created and must be
@@ -49,8 +51,9 @@ class InterferenceMaskedDIEvaluator(nn.Module):
         dino: nn.Module,
         dino_processor: Any,
         detector_model_id: str = "IDEA-Research/grounding-dino-tiny",
-        box_threshold: float = 0.35,
+        box_threshold: float = 0.3,
         text_threshold: float = 0.25,
+        max_interference_area_ratio: float = 0.5,
         freeze_dino: bool = True,
         di_predictor: Optional[nn.Module] = None,
     ):
@@ -80,6 +83,7 @@ class InterferenceMaskedDIEvaluator(nn.Module):
 
         self.box_threshold = box_threshold
         self.text_threshold = text_threshold
+        self.max_interference_area_ratio = max_interference_area_ratio
         feature_dim = getattr(self.dino.config, "hidden_size", None)
         if feature_dim is None:
             feature_dim = getattr(self.dino.config, "embed_dim", None)
@@ -154,18 +158,45 @@ class InterferenceMaskedDIEvaluator(nn.Module):
             for name, value in inputs.items()
         }
 
+    @staticmethod
+    def _normalized_cxcywh_to_absolute_xyxy(
+        normalized_boxes: torch.Tensor,
+        image_height: int,
+        image_width: int,
+    ) -> torch.Tensor:
+        """Convert Grounding DINO ``[cx, cy, w, h]`` boxes to pixel ``xyxy``.
+
+        Grounding DINO emits normalized coordinates in [0, 1]. Conversion must
+        happen before patch-grid mapping; treating cx/cy as x1/y1 causes
+        oversized or misplaced masks.
+        """
+        cx, cy, width, height = normalized_boxes.unbind(dim=-1)
+        boxes = torch.stack(
+            (
+                (cx - width * 0.5) * image_width,
+                (cy - height * 0.5) * image_height,
+                (cx + width * 0.5) * image_width,
+                (cy + height * 0.5) * image_height,
+            ),
+            dim=-1,
+        )
+        boxes[:, [0, 2]] = boxes[:, [0, 2]].clamp(0, image_width)
+        boxes[:, [1, 3]] = boxes[:, [1, 3]].clamp(0, image_height)
+        return boxes
+
     @torch.no_grad()
     def detect_interference(
         self,
         images_01: torch.Tensor,
         text_prompt: str,
     ) -> List[torch.Tensor]:
-        """Detect interference and return one ``[num_boxes, 4]`` tensor per image."""
+        """Detect interference and return original-pixel ``[x1,y1,x2,y2]`` boxes.
+
+        This intentionally performs the normalized Grounding DINO box
+        conversion explicitly instead of relying on processor post-processing.
+        """
         detector_device = next(self.detector.parameters()).device
-        original_sizes = torch.tensor(
-            [[images_01.shape[-2], images_01.shape[-1]]] * images_01.shape[0],
-            device=detector_device,
-        )
+        image_height, image_width = images_01.shape[-2:]
         # The processor accepts a list of CHW tensors in [0, 1].
         image_list = [image.cpu() for image in images_01]
         inputs = self.detector_processor(
@@ -175,19 +206,34 @@ class InterferenceMaskedDIEvaluator(nn.Module):
         )
         inputs = self._processor_tensors_on_device(inputs, detector_device)
         outputs = self.detector(**inputs)
-        results = self.detector_processor.post_process_grounded_object_detection(
-            outputs,
-            inputs["input_ids"],
-            box_threshold=self.box_threshold,
-            text_threshold=self.text_threshold,
-            target_sizes=original_sizes,
-        )
-        return [result["boxes"] for result in results]
+
+        # outputs.pred_boxes: normalized [cx, cy, width, height].
+        # outputs.logits: grounding scores per query and prompt token.
+        token_scores = outputs.logits.sigmoid()
+        query_scores = token_scores.amax(dim=-1)
+        has_prompt_token = (token_scores >= self.text_threshold).any(dim=-1)
+        keep = (query_scores >= self.box_threshold) & has_prompt_token
+
+        boxes_per_image = []
+        image_area = float(image_height * image_width)
+        for normalized_boxes, keep_for_image in zip(outputs.pred_boxes, keep):
+            boxes = self._normalized_cxcywh_to_absolute_xyxy(
+                normalized_boxes[keep_for_image],
+                image_height=image_height,
+                image_width=image_width,
+            )
+            if boxes.numel() > 0:
+                box_area = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+                # A near-full-frame region is a background false positive, not
+                # a screw/rebar. Rejecting it prevents all DINO tokens masking.
+                boxes = boxes[box_area <= self.max_interference_area_ratio * image_area]
+            boxes_per_image.append(boxes)
+        return boxes_per_image
 
     def forward(
         self,
         generated_images: torch.Tensor,
-        text_prompt: str = "metal screw. steel rebar.",
+        text_prompt: str = "metal screw . rusty rebar loop .",
         input_range: str = "minus_one_one",
         return_details: bool = False,
     ) -> Union[torch.Tensor, Dict[str, Any]]:
