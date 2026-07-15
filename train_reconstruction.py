@@ -2,7 +2,7 @@ import os, torch, datetime, importlib
 import lightning.pytorch as pl
 from torch.utils.data import DataLoader
 from src.dataset import DamagePatternDataset
-from src.utils import build_damage_image_transform
+from src.utils import build_damage_image_transform_with_loss_mask
 from argument.argument_reconstruction import parse_args, check_args, save_args
 
 def _resolve_num_workers(requested_workers):
@@ -69,7 +69,7 @@ if __name__ == "__main__":
     # check arguments
     check_args(args, current_time)
     
-    train_transform = build_damage_image_transform(
+    train_transform = build_damage_image_transform_with_loss_mask(
         image_size=args.resolution,
         use_augmentation=args.img_aug,
         output_scale=False,
@@ -92,7 +92,7 @@ if __name__ == "__main__":
         aug_erase_ratio_max=args.aug_erase_ratio_max,
         aug_erase_random_value=args.aug_erase_random_value,
     )
-    val_transform = build_damage_image_transform(
+    val_transform = build_damage_image_transform_with_loss_mask(
         image_size=args.resolution,
         use_augmentation=False,
         output_scale=False,
