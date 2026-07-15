@@ -23,7 +23,14 @@ def _load_args_from_result_dir(result_dir):
 
 if __name__ == "__main__":
     current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    print("[train_mixed] Starting...", flush=True)
     args = parse_args()
+    print(
+        f"[train_mixed] architecture={args.architecture} epoch={args.epoch} "
+        f"batch_size={args.batch_size} num_workers={args.num_workers} "
+        f"use_sd3_vae_latent={getattr(args, 'use_sd3_vae_latent', False)}",
+        flush=True,
+    )
     
     
     args.data_type = {}
@@ -47,6 +54,7 @@ if __name__ == "__main__":
     # Load extractor
     if not args.extractor_path:
         raise ValueError("Please provide --extractor_path to a trained hysteresis result directory.")
+    print(f"[train_mixed] Loading extractor from: {args.extractor_path}", flush=True)
     extractor_path = args.extractor_path
     extractor_args = _load_args_from_result_dir(extractor_path)
     extractor = importlib.import_module(f"src.model.HystereticPrediction").__dict__[extractor_args.architecture](**vars(extractor_args))
@@ -58,12 +66,15 @@ if __name__ == "__main__":
     extractor.eval()
     for p in extractor.parameters():
         p.requires_grad = False
-    print("Extractor Loading Status: ", status)
+    print("Extractor Loading Status: ", status, flush=True)
     
     
     num_workers = _resolve_num_workers(args.num_workers)
+    print("[train_mixed] Building train dataset (hidden-state extraction may take several minutes)...", flush=True)
     train_ds = PatternLoopDataset(root="./Data", mode="train", transform=transform, extractor=extractor, extractor_args=extractor_args, **vars(args))
+    print("[train_mixed] Building val dataset (hidden-state extraction may take several minutes)...", flush=True)
     val_ds = PatternLoopDataset(root="./Data", mode="val", transform=transform, extractor=extractor, extractor_args=extractor_args, **vars(args))
+    print(f"[train_mixed] train={len(train_ds)} val={len(val_ds)}", flush=True)
 
     train_dataloader = DataLoader(
         train_ds,
@@ -99,9 +110,12 @@ if __name__ == "__main__":
     # save_args
     save_args(args)
 
+    print(f"[train_mixed] Building model: {args.architecture}", flush=True)
     model = importlib.import_module(f"src.model.ImageGeneration").__dict__[args.architecture](regressor=regressor,**vars(args))
-    print(f"Total number of trainable parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad)/1024/1024:.4f} MB")
-    print(model)
+    print(
+        f"[train_mixed] Trainable params: {sum(p.numel() for p in model.parameters() if p.requires_grad)/1024/1024:.4f} MB",
+        flush=True,
+    )
 
     logger = pl.loggers.CSVLogger(save_dir=args.result_dir, name="csv_logs")
     if args.use_wandb:
@@ -121,11 +135,12 @@ if __name__ == "__main__":
         log_every_n_steps=2,
         check_val_every_n_epoch=args.val_every_n_epoch,
         max_epochs = args.epoch + 1,
-        num_sanity_val_steps=len(val_dataloader),
+        num_sanity_val_steps=min(2, len(val_dataloader)),
         callbacks = callback_list
     )
 
 
+    print("[train_mixed] Starting Lightning trainer.fit(...)", flush=True)
     trainer.fit(model,
                 train_dataloaders=train_dataloader,
                 val_dataloaders=val_dataloader)

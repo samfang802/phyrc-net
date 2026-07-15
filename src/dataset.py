@@ -341,9 +341,15 @@ class DamagePatternDataset(Dataset):
         
     def __getitem__(self, index):
         image = Image.open(os.path.join(self.root, "DamagePattern", "images", self.image_list[index]))
-        image = self.transform(image)
-        image = image / 127.5 - 1.0
-        return image
+        transformed = self.transform(image)
+        if isinstance(transformed, dict):
+            target_image = transformed["target_image"] / 127.5 - 1.0
+            return {
+                "target_image": target_image,
+                "loss_mask": transformed["loss_mask"],
+            }
+
+        return transformed / 127.5 - 1.0
     
     def __len__(self):
         return len(self.image_list)

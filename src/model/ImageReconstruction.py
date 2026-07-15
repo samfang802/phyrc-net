@@ -21,6 +21,14 @@ from torchmetrics.image import StructuralSimilarityIndexMeasure, PeakSignalNoise
 from torchvision.transforms import v2
 from sklearn.metrics import r2_score
 
+
+def _unpack_reconstruction_batch(batch):
+    """Accept legacy image tensors and mask-aware Dataset dictionaries."""
+    if isinstance(batch, dict):
+        return batch["target_image"], batch["loss_mask"]
+    return batch, None
+
+
 class VQGAN(pl.LightningModule):
     def __init__(self,
                  lr,
@@ -76,7 +84,7 @@ class VQGAN(pl.LightningModule):
         return dec, diff
 
     def training_step(self, batch, batch_idx):
-        x = batch
+        x, _loss_mask = _unpack_reconstruction_batch(batch)
         opt_ae, opt_disc = self.optimizers()
         xrec, qloss = self(x)
 
@@ -110,7 +118,7 @@ class VQGAN(pl.LightningModule):
         self.untoggle_optimizer(opt_disc)
 
     def validation_step(self, batch, batch_idx):
-        x = batch
+        x, _loss_mask = _unpack_reconstruction_batch(batch)
         xrec, qloss = self(x)
         aeloss, log_dict_ae = self.loss(qloss, x, xrec, self.current_epoch, optimizer_idx=0,
                                             last_layer=self.get_last_layer(), split="val")
@@ -226,7 +234,7 @@ class VAE(pl.LightningModule):
         return dec, posterior
 
     def training_step(self, batch, batch_idx):
-        inputs = batch
+        inputs, _loss_mask = _unpack_reconstruction_batch(batch)
         opt_ae, opt_disc = self.optimizers()
         reconstructions, posterior = self(inputs)
 
@@ -259,7 +267,7 @@ class VAE(pl.LightningModule):
         self.untoggle_optimizer(opt_disc)
 
     def validation_step(self, batch, batch_idx):
-        inputs = batch
+        inputs, _loss_mask = _unpack_reconstruction_batch(batch)
         reconstructions, posterior = self(inputs)
         aeloss, log_dict_ae = self.loss(inputs, reconstructions, posterior, self.current_epoch, optimizer_idx=0,
                                             last_layer=self.get_last_layer(), split="val")

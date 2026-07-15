@@ -1,4 +1,4 @@
-import os, glob
+import os, glob, math
 import torch
 import torch.nn as nn
 import numpy as np
@@ -46,6 +46,7 @@ def build_damage_image_transform(
     aug_erase_ratio_min=0.3,
     aug_erase_ratio_max=3.3,
     aug_erase_random_value=False,
+    include_random_erasing=True,
 ):
     transforms = [
         v2.Resize((image_size, image_size)),
@@ -89,7 +90,7 @@ def build_damage_image_transform(
         )
 
     transforms.append(v2.ToDtype(torch.float32, scale=output_scale))
-    if use_augmentation and aug_erase_prob > 0:
+    if use_augmentation and include_random_erasing and aug_erase_prob > 0:
         erase_value = "random" if aug_erase_random_value else 0.0
         transforms.append(
             v2.RandomErasing(
@@ -103,6 +104,124 @@ def build_damage_image_transform(
         transforms.append(v2.Normalize(mean=normalize_mean, std=normalize_std))
 
     return v2.Compose(transforms)
+
+
+class MaskedDamageImageTransform:
+    """Apply image augmentation and return a masked image with its valid-pixel mask.
+
+    ``loss_mask`` has shape ``(1, H, W)`` and uses 1 for original pixels and
+    0 for pixels replaced by Gaussian noise. It broadcasts over RGB channels
+    when used to weight a per-pixel loss.
+    """
+
+    def __init__(
+        self,
+        image_transform,
+        use_augmentation=False,
+        horizontal_flip_prob=0.5,
+        aug_erase_prob=0.1,
+        aug_erase_scale_min=0.01,
+        aug_erase_scale_max=0.08,
+        aug_erase_ratio_min=0.3,
+        aug_erase_ratio_max=3.3,
+    ):
+        self.image_transform = image_transform
+        self.use_augmentation = use_augmentation
+        self.horizontal_flip = v2.RandomHorizontalFlip(p=horizontal_flip_prob)
+        self.aug_erase_prob = aug_erase_prob
+        self.aug_erase_scale = (aug_erase_scale_min, aug_erase_scale_max)
+        self.aug_erase_ratio = (aug_erase_ratio_min, aug_erase_ratio_max)
+
+    @staticmethod
+    def _sample_erase_region(height, width, scale, ratio):
+        area = height * width
+        log_ratio = (math.log(ratio[0]), math.log(ratio[1]))
+
+        for _ in range(10):
+            erase_area = area * torch.empty(1).uniform_(*scale).item()
+            aspect_ratio = math.exp(torch.empty(1).uniform_(*log_ratio).item())
+            erase_height = int(round(math.sqrt(erase_area * aspect_ratio)))
+            erase_width = int(round(math.sqrt(erase_area / aspect_ratio)))
+            if 0 < erase_height <= height and 0 < erase_width <= width:
+                top = torch.randint(0, height - erase_height + 1, (1,)).item()
+                left = torch.randint(0, width - erase_width + 1, (1,)).item()
+                return top, left, erase_height, erase_width
+        return None
+
+    @staticmethod
+    def _gaussian_noise_like(region, reference):
+        # Match each image's channel statistics so noise remains in the same
+        # numerical domain for both [0, 1] and normalized tensors.
+        channel_mean = reference.mean(dim=(-2, -1), keepdim=True)
+        channel_std = reference.std(dim=(-2, -1), keepdim=True).clamp_min(1e-6)
+        return torch.randn_like(region) * channel_std + channel_mean
+
+    def __call__(self, image):
+        target_image = self.image_transform(image)
+        if target_image.ndim != 3:
+            raise ValueError(
+                "MaskedDamageImageTransform expects a CHW image tensor; "
+                f"received shape {tuple(target_image.shape)}."
+            )
+
+        loss_mask = torch.ones(
+            (1, target_image.shape[-2], target_image.shape[-1]),
+            dtype=target_image.dtype,
+            device=target_image.device,
+        )
+        if not self.use_augmentation:
+            return {"target_image": target_image, "loss_mask": loss_mask}
+
+        target_image = self.horizontal_flip(target_image)
+        if torch.rand(()) >= self.aug_erase_prob:
+            return {"target_image": target_image, "loss_mask": loss_mask}
+
+        region = self._sample_erase_region(
+            target_image.shape[-2],
+            target_image.shape[-1],
+            self.aug_erase_scale,
+            self.aug_erase_ratio,
+        )
+        if region is None:
+            return {"target_image": target_image, "loss_mask": loss_mask}
+
+        top, left, erase_height, erase_width = region
+        target_image = target_image.clone()
+        masked_region = target_image[:, top:top + erase_height, left:left + erase_width]
+        target_image[:, top:top + erase_height, left:left + erase_width] = self._gaussian_noise_like(
+            masked_region, target_image
+        )
+        loss_mask[:, top:top + erase_height, left:left + erase_width] = 0
+        return {"target_image": target_image, "loss_mask": loss_mask}
+
+
+def build_damage_image_transform_with_loss_mask(
+    image_size,
+    use_augmentation=False,
+    output_scale=True,
+    normalize_mean=None,
+    normalize_std=None,
+    **augmentation_kwargs,
+):
+    """Build an on-the-fly image transform that also emits a binary loss mask."""
+    image_transform = build_damage_image_transform(
+        image_size=image_size,
+        use_augmentation=use_augmentation,
+        output_scale=output_scale,
+        normalize_mean=normalize_mean,
+        normalize_std=normalize_std,
+        include_random_erasing=False,
+        **augmentation_kwargs,
+    )
+    return MaskedDamageImageTransform(
+        image_transform=image_transform,
+        use_augmentation=use_augmentation,
+        aug_erase_prob=augmentation_kwargs.get("aug_erase_prob", 0.1),
+        aug_erase_scale_min=augmentation_kwargs.get("aug_erase_scale_min", 0.01),
+        aug_erase_scale_max=augmentation_kwargs.get("aug_erase_scale_max", 0.08),
+        aug_erase_ratio_min=augmentation_kwargs.get("aug_erase_ratio_min", 0.3),
+        aug_erase_ratio_max=augmentation_kwargs.get("aug_erase_ratio_max", 3.3),
+    )
 
 
 def resolve_checkpoint(result_dir, patterns, description, allow_latest_fallback=True):
