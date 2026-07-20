@@ -1,0 +1,5 @@
+[train_ADMCFM] Script version: HF-direct-v2
+[train_ADMCFM] Working directory: /Data/home/samfang802/intership-project
+[train_ADMCFM] Downloading best.ckpt from HF repo: samfang802/rc-column-HysGRU-feature-extractor
+[train_ADMCFM] Downloaded best.ckpt -> ./phase1_extractor/best.ckpt
+[train_ADMCFM] Generated args.json -> ./phase1_extractor/args.json

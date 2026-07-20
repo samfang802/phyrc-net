@@ -47,6 +47,23 @@ def build_generation_condition(
     return torch.cat(parts, dim=1)
 
 
+def _parse_fixed_di_values(raw_values, fallback_count):
+    if isinstance(raw_values, (list, tuple)):
+        parsed = [float(v) for v in raw_values]
+    else:
+        parsed = []
+        for token in str(raw_values).split(","):
+            token = token.strip()
+            if not token:
+                continue
+            parsed.append(float(token))
+    if not parsed:
+        parsed = [0.0, 0.4, 0.75, 0.95]
+    if len(parsed) < fallback_count:
+        parsed.extend([parsed[-1]] * (fallback_count - len(parsed)))
+    return parsed[:fallback_count]
+
+
 class HystereticCGAN(pl.LightningModule):
     def __init__(self, architecture, loss_type, condition_dim, SELU, G_h_size, D_h_size, spectral_D, no_batch_norm, 
                 image_size, z_dim, lr, result_dir, latent_conditioning, direction_conditioning, add_DI_loss,
@@ -67,6 +84,7 @@ class HystereticCGAN(pl.LightningModule):
         self.warmup_epochs = kwargs.get("warmup_epochs", 5)
         self.min_lr_ratio = kwargs.get("min_lr_ratio", 0.1)
         self.total_epochs = kwargs.get("epoch", 10) + 1
+        self.optimizer_name = str(kwargs.get("optimizer", "adamw")).lower()
         
         
         
@@ -431,8 +449,14 @@ class CFMADM(pl.LightningModule):
         self.warmup_epochs = kwargs.get("warmup_epochs", 5)
         self.min_lr_ratio = kwargs.get("min_lr_ratio", 0.1)
         self.total_epochs = kwargs.get("epoch", 10) + 1
+        self.optimizer_name = str(kwargs.get("optimizer", "adamw")).lower()
         self.inference_every_n_epochs = max(1, int(kwargs.get("inference_every_n_epochs", 10)))
         self.inference_num_images = max(1, int(kwargs.get("inference_num_images", 6)))
+        self.metrics_every_n_epochs = max(1, int(kwargs.get("metrics_every_n_epochs", 100)))
+        self.fixed_di_values = _parse_fixed_di_values(
+            kwargs.get("fixed_di_values", "0.0,0.4,0.75,0.95"),
+            self.inference_num_images,
+        )
         self.use_sd3_vae_latent = kwargs.get("use_sd3_vae_latent", False)
         self.sd3_vae_model_id = kwargs.get("sd3_vae_model_id", "stabilityai/stable-diffusion-3-medium-diffusers")
         self.sd3_vae_subfolder = kwargs.get("sd3_vae_subfolder", "vae")
@@ -487,13 +511,13 @@ class CFMADM(pl.LightningModule):
             cond_dim=cfm_cond_dim,
             latent_dim=condition_dim,
             dropout=cfm_dropout,
-            use_mid_attention=True,
+            use_mid_attention=False,
         )
 
         self.psnr = PeakSignalNoiseRatio(data_range=1.0)
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0)
         self.fid = FrechetInceptionDistance(feature=2048, reset_real_features=False, normalize=True)
-        self.validation_outputs = {"gt_DI": [], "pred_DI": [], "samples": []}
+        self.validation_outputs = {"gt_DI": [], "pred_DI": [], "anchor_candidates": []}
 
         self.regressor = kwargs.get("regressor", None)
         if self.add_DI_loss:
@@ -545,14 +569,55 @@ class CFMADM(pl.LightningModule):
             self.include_di_conditioning,
         )
 
-    def flow_matching_loss(self, z1, c):
+    def _should_log_metrics(self):
+        epoch_num = self.current_epoch + 1
+        return epoch_num % self.metrics_every_n_epochs == 0
+
+    def _should_run_inference(self):
+        epoch_num = self.current_epoch + 1
+        return (self.current_epoch == 0) or (epoch_num % self.inference_every_n_epochs == 0)
+
+    def _get_inference_di_values(self):
+        # Use fixed DI values for stable, comparable inference panels.
+        return [float(v) for v in self.fixed_di_values[: self.inference_num_images]]
+
+    @staticmethod
+    def _unpack_generation_batch(batch):
+        if len(batch) >= 8:
+            real_data, hidden_state, direction, exp, timestep, DI, info, loss_mask = batch[:8]
+        else:
+            real_data, hidden_state, direction, exp, timestep, DI, info = batch
+            loss_mask = torch.ones(
+                (real_data.shape[0], 1, real_data.shape[-2], real_data.shape[-1]),
+                device=real_data.device,
+                dtype=real_data.dtype,
+            )
+        return real_data, hidden_state, direction, exp, timestep, DI, info, loss_mask
+
+    def flow_matching_loss(self, z1, c, loss_mask=None):
         b = z1.shape[0]
         t = torch.rand(b, device=z1.device)
         z0 = torch.randn_like(z1)
         zt = (1.0 - t[:, None, None, None]) * z0 + t[:, None, None, None] * z1
         target_u = z1 - z0
         pred_v = self.velocity_net(zt, t, c)
-        return torch.mean((pred_v - target_u) ** 2)
+        mse = (pred_v - target_u) ** 2
+        if loss_mask is None:
+            return torch.mean(mse)
+
+        mask = loss_mask.to(device=mse.device, dtype=mse.dtype)
+        if mask.ndim == 3:
+            mask = mask.unsqueeze(1)
+        if mask.shape[-2:] != mse.shape[-2:]:
+            mask = F.interpolate(mask, size=mse.shape[-2:], mode="nearest")
+        if mask.shape[1] == 1 and mse.shape[1] > 1:
+            mask = mask.expand(-1, mse.shape[1], -1, -1)
+        elif mask.shape[1] != mse.shape[1]:
+            mask = mask.mean(dim=1, keepdim=True).expand(-1, mse.shape[1], -1, -1)
+
+        weighted = mse * mask
+        denom = mask.sum().clamp_min(1.0)
+        return weighted.sum() / denom
 
     def sample_with_ode(self, c, z0=None, num_steps=None):
         # Separate ODE solver from training objective.
@@ -581,10 +646,10 @@ class CFMADM(pl.LightningModule):
         return z
 
     def training_step(self, batch, batch_idx):
-        real_data, hidden_state, direction, exp, timestep, DI, info = batch
+        real_data, hidden_state, direction, exp, timestep, DI, info, loss_mask = self._unpack_generation_batch(batch)
         c = self.process_condition(info, hidden_state, direction, DI)
         target_space_data = self._encode_to_target_space(real_data)
-        loss_fm = self.flow_matching_loss(target_space_data, c)
+        loss_fm = self.flow_matching_loss(target_space_data, c, loss_mask=loss_mask)
 
         if self.add_DI_loss:
             sampled = self.sample_with_ode(c)
@@ -603,31 +668,54 @@ class CFMADM(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        real_data, hidden_state, direction, exp, timestep, DI, info = batch
+        real_data, hidden_state, direction, exp, timestep, DI, info, loss_mask = self._unpack_generation_batch(batch)
         c = self.process_condition(info, hidden_state, direction, DI)
 
         target_space_data = self._encode_to_target_space(real_data)
-        val_fm_loss = self.flow_matching_loss(target_space_data, c)
+        val_fm_loss = self.flow_matching_loss(target_space_data, c, loss_mask=loss_mask)
         sampled = self.sample_with_ode(c)
         sampled_image = self._decode_from_target_space(sampled)
 
         real_vis = torch.clamp(real_data * 0.5 + 0.5, 0.0, 1.0)
         sampled_vis = torch.clamp(sampled_image * 0.5 + 0.5, 0.0, 1.0)
-        self.psnr.update(sampled_vis, real_vis)
-        self.ssim.update(sampled_vis, real_vis)
-        self.fid.update(sampled_vis, real=False)
-        self.fid.update(real_vis, real=True)
+        if self._should_log_metrics():
+            self.psnr.update(sampled_vis, real_vis)
+            self.ssim.update(sampled_vis, real_vis)
+            self.fid.update(sampled_vis, real=False)
+            self.fid.update(real_vis, real=True)
 
-        if len(self.validation_outputs["samples"]) < self.inference_num_images:
-            max_store = self.inference_num_images - len(self.validation_outputs["samples"])
-            batch_store = min(max_store, sampled_vis.shape[0])
-            for i in range(batch_store):
-                self.validation_outputs["samples"].append(
+        candidate_cap = max(32, int(self.inference_num_images) * 24)
+        if len(self.validation_outputs["anchor_candidates"]) < candidate_cap:
+            remaining = candidate_cap - len(self.validation_outputs["anchor_candidates"])
+            take_count = min(remaining, real_vis.shape[0])
+            for sample_idx in range(take_count):
+                if isinstance(exp, (list, tuple)):
+                    anchor_exp = exp[sample_idx]
+                elif torch.is_tensor(exp) and exp.ndim > 0:
+                    anchor_exp = exp[sample_idx]
+                else:
+                    anchor_exp = exp
+                if torch.is_tensor(anchor_exp):
+                    anchor_exp = anchor_exp.item()
+
+                if torch.is_tensor(timestep):
+                    anchor_timestep = int(timestep[sample_idx].item())
+                elif isinstance(timestep, (list, tuple)):
+                    anchor_timestep = int(timestep[sample_idx])
+                else:
+                    anchor_timestep = int(timestep)
+
+                gt_di_value = float(DI[sample_idx].item()) if torch.is_tensor(DI) else float(DI)
+                self.validation_outputs["anchor_candidates"].append(
                     {
-                        "real": real_vis[i].detach().cpu(),
-                        "pred": sampled_vis[i].detach().cpu(),
-                        "exp": exp[i] if isinstance(exp, (list, tuple)) else exp,
-                        "timestep": int(timestep[i].item()) if torch.is_tensor(timestep[i]) else int(timestep[i]),
+                        "real": real_vis[sample_idx].detach().cpu(),
+                        "hidden_state": hidden_state[sample_idx].detach().cpu(),
+                        "direction": direction[sample_idx].detach().cpu(),
+                        "info": info[sample_idx].detach().cpu(),
+                        "exp": anchor_exp,
+                        "timestep": anchor_timestep,
+                        "gt_di": gt_di_value,
+                        "sample_uid": f"{anchor_exp}_{anchor_timestep}_{sample_idx}_{len(self.validation_outputs['anchor_candidates'])}",
                     }
                 )
 
@@ -640,50 +728,87 @@ class CFMADM(pl.LightningModule):
         self.log("val/loss", val_fm_loss, prog_bar=False, on_step=False, on_epoch=True)
 
     def on_validation_epoch_end(self):
-        psnr = self.psnr.compute()
-        ssim = self.ssim.compute()
-        fid = self.fid.compute()
-        self.log("val/psnr", psnr)
-        self.log("val/ssim", ssim)
-        self.log("val/fid", fid)
+        epoch_num = self.current_epoch + 1
+        if self._should_log_metrics():
+            psnr = self.psnr.compute()
+            ssim = self.ssim.compute()
+            fid = self.fid.compute()
+            self.log("val/psnr", psnr)
+            self.log("val/ssim", ssim)
+            self.log("val/fid", fid)
         self.psnr.reset()
         self.ssim.reset()
         self.fid.reset()
 
-        if (self.current_epoch % self.inference_every_n_epochs == 0) and len(self.validation_outputs["samples"]) > 0:
-            rows = len(self.validation_outputs["samples"])
-            fig, axes = plt.subplots(rows, 2, figsize=(8, max(3, rows * 2.5)))
-            if rows == 1:
-                axes = np.array([axes])
-            for i, sample in enumerate(self.validation_outputs["samples"]):
-                real_img = sample["real"].permute(1, 2, 0).numpy()
-                pred_img = sample["pred"].permute(1, 2, 0).numpy()
-                axes[i, 0].imshow(real_img)
-                axes[i, 0].set_title(f"GT | {sample['exp']} | t={sample['timestep']}")
-                axes[i, 0].axis("off")
-                axes[i, 1].imshow(pred_img)
-                axes[i, 1].set_title("Inference")
-                axes[i, 1].axis("off")
-            fig.suptitle(f"CFM Inference Samples - Epoch {self.current_epoch:05d}")
+        should_infer = self._should_run_inference()
+        candidates = self.validation_outputs["anchor_candidates"]
+        if should_infer and len(candidates) > 0:
+            di_values = self._get_inference_di_values()
+            selected_anchors = []
+            used_uids = set()
+            for target_di in di_values:
+                ranked = sorted(candidates, key=lambda c: abs(c["gt_di"] - float(target_di)))
+                chosen = None
+                for candidate in ranked:
+                    if candidate["sample_uid"] not in used_uids:
+                        chosen = candidate
+                        break
+                if chosen is None:
+                    continue
+                used_uids.add(chosen["sample_uid"])
+                selected_anchors.append(chosen)
+
+            pair_count = min(len(di_values), len(selected_anchors))
+            fig, axes = plt.subplots(pair_count, 2, figsize=(6, max(3, pair_count * 2.5)))
+            if pair_count == 1:
+                axes = [axes]
+
+            with torch.no_grad():
+                for i in range(pair_count):
+                    anchor = selected_anchors[i]
+                    hidden_state = anchor["hidden_state"].unsqueeze(0).to(self.device)
+                    direction = anchor["direction"].unsqueeze(0).to(self.device)
+                    info = anchor["info"].unsqueeze(0).to(self.device)
+                    di_value = di_values[i]
+                    di = torch.tensor([[di_value]], device=self.device, dtype=info.dtype)
+                    c = self.process_condition(info, hidden_state, direction, di)
+                    sampled = self.sample_with_ode(c)
+                    sampled_image = self._decode_from_target_space(sampled)
+                    sampled_vis = torch.clamp(sampled_image * 0.5 + 0.5, 0.0, 1.0)[0].detach().cpu()
+
+                    axes[i][0].imshow(anchor["real"].permute(1, 2, 0).numpy())
+                    axes[i][0].set_title(f"GT | {anchor['exp']} | t={anchor['timestep']} | GT_DI={anchor['gt_di']:.2f}")
+                    axes[i][0].axis("off")
+                    axes[i][1].imshow(sampled_vis.permute(1, 2, 0).numpy())
+                    axes[i][1].set_title(f"Inference | fixed_di={di_value:.2f}")
+                    axes[i][1].axis("off")
+
+            fig.suptitle(f"CFM Fixed-DI Inference | Epoch {epoch_num:05d}")
             plt.tight_layout()
 
             save_dir = os.path.join(self.result_dir, "inference_samples")
             os.makedirs(save_dir, exist_ok=True)
-            fig_path = os.path.join(save_dir, f"epoch_{self.current_epoch:05d}.png")
+            fig_path = os.path.join(save_dir, f"fixed_di_epoch_{epoch_num:05d}.png")
             fig.savefig(fig_path, dpi=150, bbox_inches="tight")
-            print(f"[CFM] Saved inference samples: {fig_path}")
+            print(f"[CFM] Saved fixed-DI inference samples: {fig_path}")
             if wandb.run is not None:
-                wandb.log({f"CFM/Inference Epoch {self.current_epoch:05d}": wandb.Image(fig)})
+                wandb.log({f"CFM/FixedDI Epoch {epoch_num:05d}": wandb.Image(fig)})
             plt.close(fig)
 
         if self.add_DI_loss and len(self.validation_outputs["gt_DI"]) > 0:
             gt = torch.concatenate(self.validation_outputs["gt_DI"]).cpu().numpy()
             prediction = torch.concatenate(self.validation_outputs["pred_DI"]).cpu().numpy()
             self.log("val/r2", r2_score(gt, prediction))
-        self.validation_outputs = {"gt_DI": [], "pred_DI": [], "samples": []}
+        self.validation_outputs = {"gt_DI": [], "pred_DI": [], "anchor_candidates": []}
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.velocity_net.parameters(), lr=self.lr)
+        optimizer_name = getattr(self, "optimizer_name", "adamw")
+        if optimizer_name == "adamw":
+            optimizer = torch.optim.AdamW(self.velocity_net.parameters(), lr=self.lr)
+        elif optimizer_name == "adam":
+            optimizer = torch.optim.Adam(self.velocity_net.parameters(), lr=self.lr)
+        else:
+            raise ValueError(f"Unsupported optimizer: {optimizer_name}")
         if self.lr_schedule != "warmup_cosine":
             return optimizer
 
@@ -697,6 +822,15 @@ class CFMADM(pl.LightningModule):
 
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
         return [optimizer], [scheduler]
+
+    def on_before_optimizer_step(self, optimizer):
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+        grad_norm_sq = torch.zeros(1, device=self.device)
+        for param in self.velocity_net.parameters():
+            if param.grad is not None:
+                grad_norm_sq += torch.sum(param.grad.detach() ** 2)
+        grad_norm = torch.sqrt(grad_norm_sq).squeeze(0)
+        self.log("train/grad_norm", grad_norm, on_step=True, on_epoch=True, prog_bar=False, logger=True)
 
 
 class Baseline(pl.LightningModule):

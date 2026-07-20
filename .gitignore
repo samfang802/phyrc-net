@@ -1,15 +1,52 @@
-/__pycache__
-*/__pycache__
-*/*/__pycache__
-/results
-/log
-/Sample
+# Python cache/compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Python virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.tox/
+.nox/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# ML/DL model artifacts
+*.ckpt
+*.pt
+*.pth
+*.onnx
+
+# Logs and runtime artifacts
+*.log
+logs/
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Project-specific generated outputs
+data/
+results/
+log/
+Sample/
+temp/
+temp_all/
+evaluation/
+notebook/
+generation/
+phase1_extractor/
 job.sh
-/temp
-/temp_all
-/evaluation
-/notebook
-/generation
 draw.ipynb
 best.ckpt
-phase1_extractor/
