@@ -37,12 +37,13 @@ def build_damage_image_transform(
     aug_translate=0.02,
     aug_scale_min=0.98,
     aug_scale_max=1.02,
+    aug_affine=True,
     aug_blur_kernel=3,
     aug_blur_sigma_min=0.1,
     aug_blur_sigma_max=0.5,
-    aug_erase_prob=0.1,
-    aug_erase_scale_min=0.01,
-    aug_erase_scale_max=0.08,
+    aug_erase_prob=0.0,
+    aug_erase_scale_min=0.1,
+    aug_erase_scale_max=0.2,
     aug_erase_ratio_min=0.3,
     aug_erase_ratio_max=3.3,
     aug_erase_random_value=False,
@@ -54,19 +55,21 @@ def build_damage_image_transform(
     ]
 
     if use_augmentation:
-        transforms.extend(
-            [
-                v2.RandomApply(
-                    [
-                        v2.ColorJitter(
-                            brightness=aug_brightness,
-                            contrast=aug_contrast,
-                            saturation=aug_saturation,
-                            hue=aug_hue,
-                        )
-                    ],
-                    p=aug_prob,
-                ),
+        transforms.append(
+            v2.RandomApply(
+                [
+                    v2.ColorJitter(
+                        brightness=aug_brightness,
+                        contrast=aug_contrast,
+                        saturation=aug_saturation,
+                        hue=aug_hue,
+                    )
+                ],
+                p=aug_prob,
+            )
+        )
+        if aug_affine:
+            transforms.append(
                 v2.RandomApply(
                     [
                         v2.RandomAffine(
@@ -76,17 +79,18 @@ def build_damage_image_transform(
                         )
                     ],
                     p=aug_prob,
-                ),
-                v2.RandomApply(
-                    [
-                        v2.GaussianBlur(
-                            kernel_size=_normalize_blur_kernel(aug_blur_kernel),
-                            sigma=(aug_blur_sigma_min, aug_blur_sigma_max),
-                        )
-                    ],
-                    p=aug_blur_prob,
-                ),
-            ]
+                )
+            )
+        transforms.append(
+            v2.RandomApply(
+                [
+                    v2.GaussianBlur(
+                        kernel_size=_normalize_blur_kernel(aug_blur_kernel),
+                        sigma=(aug_blur_sigma_min, aug_blur_sigma_max),
+                    )
+                ],
+                p=aug_blur_prob,
+            )
         )
 
     transforms.append(v2.ToDtype(torch.float32, scale=output_scale))
@@ -119,7 +123,7 @@ class MaskedDamageImageTransform:
         image_transform,
         use_augmentation=False,
         horizontal_flip_prob=0.5,
-        aug_erase_prob=0.1,
+        aug_erase_prob=0.25,
         aug_erase_scale_min=0.01,
         aug_erase_scale_max=0.08,
         aug_erase_ratio_min=0.3,
@@ -127,7 +131,7 @@ class MaskedDamageImageTransform:
     ):
         self.image_transform = image_transform
         self.use_augmentation = use_augmentation
-        self.horizontal_flip = v2.RandomHorizontalFlip(p=horizontal_flip_prob)
+        self.horizontal_flip_prob = horizontal_flip_prob
         self.aug_erase_prob = aug_erase_prob
         self.aug_erase_scale = (aug_erase_scale_min, aug_erase_scale_max)
         self.aug_erase_ratio = (aug_erase_ratio_min, aug_erase_ratio_max)
@@ -169,12 +173,16 @@ class MaskedDamageImageTransform:
             dtype=target_image.dtype,
             device=target_image.device,
         )
+        flipped = False
         if not self.use_augmentation:
-            return {"target_image": target_image, "loss_mask": loss_mask}
+            return {"target_image": target_image, "loss_mask": loss_mask, "flipped": flipped}
 
-        target_image = self.horizontal_flip(target_image)
+        if torch.rand(()) < self.horizontal_flip_prob:
+            target_image = torch.flip(target_image, dims=(-1,))
+            loss_mask = torch.flip(loss_mask, dims=(-1,))
+            flipped = True
         if torch.rand(()) >= self.aug_erase_prob:
-            return {"target_image": target_image, "loss_mask": loss_mask}
+            return {"target_image": target_image, "loss_mask": loss_mask, "flipped": flipped}
 
         region = self._sample_erase_region(
             target_image.shape[-2],
@@ -183,7 +191,7 @@ class MaskedDamageImageTransform:
             self.aug_erase_ratio,
         )
         if region is None:
-            return {"target_image": target_image, "loss_mask": loss_mask}
+            return {"target_image": target_image, "loss_mask": loss_mask, "flipped": flipped}
 
         top, left, erase_height, erase_width = region
         target_image = target_image.clone()
@@ -192,7 +200,7 @@ class MaskedDamageImageTransform:
             masked_region, target_image
         )
         loss_mask[:, top:top + erase_height, left:left + erase_width] = 0
-        return {"target_image": target_image, "loss_mask": loss_mask}
+        return {"target_image": target_image, "loss_mask": loss_mask, "flipped": flipped}
 
 
 def build_damage_image_transform_with_loss_mask(
@@ -204,6 +212,7 @@ def build_damage_image_transform_with_loss_mask(
     **augmentation_kwargs,
 ):
     """Build an on-the-fly image transform that also emits a binary loss mask."""
+    hflip_prob = float(augmentation_kwargs.pop("aug_hflip_prob", 0.5))
     image_transform = build_damage_image_transform(
         image_size=image_size,
         use_augmentation=use_augmentation,
@@ -216,7 +225,8 @@ def build_damage_image_transform_with_loss_mask(
     return MaskedDamageImageTransform(
         image_transform=image_transform,
         use_augmentation=use_augmentation,
-        aug_erase_prob=augmentation_kwargs.get("aug_erase_prob", 0.1),
+        horizontal_flip_prob=hflip_prob,
+        aug_erase_prob=augmentation_kwargs.get("aug_erase_prob", 0.25),
         aug_erase_scale_min=augmentation_kwargs.get("aug_erase_scale_min", 0.01),
         aug_erase_scale_max=augmentation_kwargs.get("aug_erase_scale_max", 0.08),
         aug_erase_ratio_min=augmentation_kwargs.get("aug_erase_ratio_min", 0.3),

@@ -1,8 +1,10 @@
 import os, torch, datetime, importlib, json, glob, argparse
+import numpy as np
 import lightning.pytorch as pl
+import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
-from torchvision import transforms
 from src.dataset import PatternLoopDataset
+from src.utils import build_damage_image_transform_with_loss_mask
 from argument.argument_mixed import parse_args, check_args, set_dataset_args, save_args
 
 def _resolve_num_workers(requested_workers):
@@ -20,6 +22,66 @@ def _load_args_from_result_dir(result_dir):
     return argparse.Namespace(**json.load(open(args_path, "r")))
 
 
+def _save_augmented_grid_preview(dataset, result_dir, num_images=100, grid_size=10):
+    total = len(dataset)
+    if total == 0:
+        print("[train_mixed] Skip augmentation preview: empty dataset.", flush=True)
+        return
+
+    sample_count = min(num_images, total)
+    indices = torch.randperm(total)[:sample_count].tolist()
+    images = []
+    for idx in indices:
+        image, *_ = dataset[idx]
+        if torch.is_tensor(image):
+            img = image.detach().cpu()
+            if img.ndim == 3 and img.shape[0] in (1, 3):
+                img = (img * 0.5 + 0.5).clamp(0.0, 1.0)
+                images.append(img.permute(1, 2, 0).numpy())
+
+    if not images:
+        print("[train_mixed] Skip augmentation preview: no valid images sampled.", flush=True)
+        return
+
+    rows = grid_size
+    cols = grid_size
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 1.6, rows * 1.6))
+    axes = np.array(axes).reshape(rows, cols)
+    for i in range(rows * cols):
+        r, c = divmod(i, cols)
+        ax = axes[r][c]
+        ax.axis("off")
+        if i < len(images):
+            ax.imshow(images[i])
+
+    fig.suptitle("Train Augmentation Preview (Random 100)", fontsize=12)
+    plt.tight_layout()
+    out_path = os.path.join(result_dir, "data_check", "train_aug_preview_10x10.png")
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"[train_mixed] Saved augmentation preview: {out_path}", flush=True)
+
+
+
+class PeriodicPtCheckpoint(pl.Callback):
+    def __init__(self, every_n_epochs=100):
+        super().__init__()
+        self.every_n_epochs = max(1, int(every_n_epochs))
+
+    def on_train_epoch_end(self, trainer, pl_module):
+        epoch_num = trainer.current_epoch + 1
+        if epoch_num % self.every_n_epochs != 0:
+            return
+        save_path = os.path.join(pl_module.result_dir, f"checkpoint_epoch_{epoch_num}.pt")
+        payload = {
+            "epoch": trainer.current_epoch,
+            "global_step": trainer.global_step,
+            "state_dict": pl_module.state_dict(),
+            "hyper_parameters": dict(getattr(pl_module, "hparams", {})),
+        }
+        torch.save(payload, save_path)
+        print(f"[train_mixed] Saved periodic checkpoint: {save_path}", flush=True)
+
 
 if __name__ == "__main__":
     current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -35,21 +97,102 @@ if __name__ == "__main__":
     
     args.data_type = {}
     args.data_version = 1
-    callback_list = [
-        pl.callbacks.ModelCheckpoint(monitor="epoch", every_n_epochs=int((args.epoch + 1)/2), filename="{epoch:05d}"),
-        pl.callbacks.ModelCheckpoint(filename="{epoch:05d}"),
-        pl.callbacks.ModelCheckpoint(monitor="val/fid", mode="min", save_top_k=1, filename="best_fid_{val/fid:.2f}"),
-        pl.callbacks.ModelCheckpoint(monitor="val/ssim", mode="max", save_top_k=1, filename="best_ssim_{val/ssim:.4f}")
-    ]
+    callback_list = [pl.callbacks.ModelCheckpoint(save_last=True, filename="last")]
+    if args.checkpoint_every_n_epochs > 0:
+        callback_list.insert(0, PeriodicPtCheckpoint(every_n_epochs=args.checkpoint_every_n_epochs))
+    if args.early_stop_patience > 0:
+        callback_list.append(
+            pl.callbacks.EarlyStopping(
+                monitor="val/loss",
+                mode="min",
+                patience=args.early_stop_patience,
+                min_delta=args.early_stop_min_delta,
+            )
+        )
+    if args.architecture == "CFMADM":
+        # CFM metrics may be sparse (e.g. metrics_every_n_epochs=300), so always
+        # keep a stable val/loss monitor for checkpoint selection.
+        callback_list.append(
+            pl.callbacks.ModelCheckpoint(
+                monitor="val/loss",
+                mode="min",
+                save_top_k=1,
+                filename="best_val_loss_{val/loss:.4f}",
+            )
+        )
+        if args.metrics_every_n_epochs <= args.val_every_n_epoch:
+            callback_list.append(
+                pl.callbacks.ModelCheckpoint(
+                    monitor="val/fid",
+                    mode="min",
+                    save_top_k=1,
+                    filename="best_fid_{val/fid:.2f}",
+                )
+            )
+            callback_list.append(
+                pl.callbacks.ModelCheckpoint(
+                    monitor="val/ssim",
+                    mode="max",
+                    save_top_k=1,
+                    filename="best_ssim_{val/ssim:.4f}",
+                )
+            )
+    else:
+        callback_list.append(
+            pl.callbacks.ModelCheckpoint(
+                monitor="val/fid",
+                mode="min",
+                save_top_k=1,
+                filename="best_fid_{val/fid:.2f}",
+            )
+        )
+        callback_list.append(
+            pl.callbacks.ModelCheckpoint(
+                monitor="val/ssim",
+                mode="max",
+                save_top_k=1,
+                filename="best_ssim_{val/ssim:.4f}",
+            )
+        )
 
     # check arguments
     check_args(args, current_time)
     
-    transform = transforms.Compose([
-        transforms.Resize((args.image_size, args.image_size)), 
-        transforms.ToTensor(), 
-        transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
-    ])
+    train_transform = build_damage_image_transform_with_loss_mask(
+        image_size=args.image_size,
+        use_augmentation=args.img_aug,
+        output_scale=True,
+        normalize_mean=(0.5, 0.5, 0.5),
+        normalize_std=(0.5, 0.5, 0.5),
+        aug_prob=args.aug_prob,
+        aug_blur_prob=args.aug_blur_prob,
+        aug_brightness=args.aug_brightness,
+        aug_contrast=args.aug_contrast,
+        aug_saturation=args.aug_saturation,
+        aug_hue=args.aug_hue,
+        aug_translate=args.aug_translate,
+        aug_scale_min=args.aug_scale_min,
+        aug_scale_max=args.aug_scale_max,
+        aug_affine=args.aug_affine,
+        aug_hflip_prob=args.aug_hflip_prob,
+        aug_blur_kernel=args.aug_blur_kernel,
+        aug_blur_sigma_min=args.aug_blur_sigma_min,
+        aug_blur_sigma_max=args.aug_blur_sigma_max,
+        aug_erase_prob=args.aug_erase_prob,
+        aug_erase_scale_min=args.aug_erase_scale_min,
+        aug_erase_scale_max=args.aug_erase_scale_max,
+        aug_erase_ratio_min=args.aug_erase_ratio_min,
+        aug_erase_ratio_max=args.aug_erase_ratio_max,
+        aug_erase_random_value=args.aug_erase_random_value,
+    )
+    val_transform = build_damage_image_transform_with_loss_mask(
+        image_size=args.image_size,
+        use_augmentation=False,
+        output_scale=True,
+        normalize_mean=(0.5, 0.5, 0.5),
+        normalize_std=(0.5, 0.5, 0.5),
+    )
+    print(f"[train_mixed] img_aug={args.img_aug} aug_erase_prob={args.aug_erase_prob}", flush=True)
     
     # Load extractor
     if not args.extractor_path:
@@ -71,10 +214,27 @@ if __name__ == "__main__":
     
     num_workers = _resolve_num_workers(args.num_workers)
     print("[train_mixed] Building train dataset (hidden-state extraction may take several minutes)...", flush=True)
-    train_ds = PatternLoopDataset(root="./Data", mode="train", transform=transform, extractor=extractor, extractor_args=extractor_args, **vars(args))
+    train_ds = PatternLoopDataset(
+        root="./Data",
+        mode="train",
+        transform=train_transform,
+        extractor=extractor,
+        extractor_args=extractor_args,
+        use_loss_mask=True,
+        **vars(args),
+    )
     print("[train_mixed] Building val dataset (hidden-state extraction may take several minutes)...", flush=True)
-    val_ds = PatternLoopDataset(root="./Data", mode="val", transform=transform, extractor=extractor, extractor_args=extractor_args, **vars(args))
+    val_ds = PatternLoopDataset(
+        root="./Data",
+        mode="val",
+        transform=val_transform,
+        extractor=extractor,
+        extractor_args=extractor_args,
+        use_loss_mask=True,
+        **vars(args),
+    )
     print(f"[train_mixed] train={len(train_ds)} val={len(val_ds)}", flush=True)
+    _save_augmented_grid_preview(train_ds, args.result_dir, num_images=100, grid_size=10)
 
     train_dataloader = DataLoader(
         train_ds,
@@ -140,7 +300,13 @@ if __name__ == "__main__":
     )
 
 
+    ckpt_path = args.resume.strip() if getattr(args, "resume", "") else None
+    if ckpt_path:
+        os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
+        torch.serialization.add_safe_globals([np._core.multiarray.scalar])
+        print(f"[train_mixed] Resuming from checkpoint: {ckpt_path}", flush=True)
     print("[train_mixed] Starting Lightning trainer.fit(...)", flush=True)
     trainer.fit(model,
                 train_dataloaders=train_dataloader,
-                val_dataloaders=val_dataloader)
+                val_dataloaders=val_dataloader,
+                ckpt_path=ckpt_path)

@@ -244,10 +244,50 @@ class PatternLoopDataset(Dataset):
         self.info = pd.read_csv(os.path.join(self.root, "Hysteresis", f"info_w_mander_big.csv")).loc[:, column_info]
         statistics = pd.read_csv(os.path.join(self.root, "Hysteresis", f"statistics_big.csv"), index_col=0)
         self.info = standardize(self.info, statistics)
+        self.feature_columns = [col for col in self.info.columns if col != "id"]
+        signed_keywords = (
+            "disp", "drift", "deform", "rotation", "moment", "force", "shear", "axial",
+            "ux", "uy", "dx", "dy", "vx", "vy", "dir", "direction"
+        )
+        self.signed_feature_indices = [
+            i for i, name in enumerate(self.feature_columns)
+            if any(token in name.lower() for token in signed_keywords)
+        ]
         self.hysteresis = {}
         self.hidden_state = self.get_hidden_state(extractor, self.exp_list, result_dir=result_dir)
+        self.use_loss_mask = bool(kwargs.get("use_loss_mask", False))
+        self.condition_perturb = bool(kwargs.get("condition_perturb", False)) and self.mode == "train"
+        self.condition_perturb_dist = str(kwargs.get("condition_perturb_dist", "uniform")).lower()
+        perturb_min = float(kwargs.get("condition_perturb_min", 0.01))
+        perturb_max = float(kwargs.get("condition_perturb_max", 0.03))
+        self.condition_perturb_min = min(perturb_min, perturb_max)
+        self.condition_perturb_max = max(perturb_min, perturb_max)
+        self.condition_perturb_on_hidden = bool(kwargs.get("condition_perturb_on_hidden", True))
+        self.condition_perturb_on_info = bool(kwargs.get("condition_perturb_on_info", True))
+        self.condition_perturb_on_di = bool(kwargs.get("condition_perturb_on_di", True))
         print("Done!")
         
+    def _sample_relative_noise(self, shape, device, dtype):
+        if self.condition_perturb_dist == "normal":
+            if self.condition_perturb_max <= 0.0:
+                return torch.zeros(shape, device=device, dtype=dtype)
+            std = float(np.random.uniform(self.condition_perturb_min, self.condition_perturb_max))
+            return torch.randn(shape, device=device, dtype=dtype) * std
+        magnitude = torch.empty(shape, device=device, dtype=dtype).uniform_(
+            self.condition_perturb_min,
+            self.condition_perturb_max,
+        )
+        sign = torch.where(
+            torch.rand(shape, device=device) < 0.5,
+            torch.tensor(-1.0, device=device, dtype=dtype),
+            torch.tensor(1.0, device=device, dtype=dtype),
+        )
+        return magnitude * sign
+
+    def _apply_condition_perturbation(self, tensor):
+        noise = self._sample_relative_noise(tensor.shape, tensor.device, tensor.dtype)
+        return tensor * (1.0 + noise)
+
 
     def __getitem__(self, index):
         filename, exp, direction, timestep, DI = self.label.iloc[index, :].values
@@ -256,12 +296,37 @@ class PatternLoopDataset(Dataset):
         info = torch.FloatTensor(info)
         hidden_state = self.hidden_state[exp][int(timestep), :]
         image = self.transform(image)
+        flipped = False
+        if isinstance(image, dict):
+            loss_mask = image.get("loss_mask", None)
+            flipped = bool(image.get("flipped", False))
+            image = image["target_image"]
+        else:
+            loss_mask = None
+        if loss_mask is None:
+            loss_mask = torch.ones((1, image.shape[-2], image.shape[-1]), dtype=image.dtype)
         DI = torch.FloatTensor([DI])
         if direction == "Pull":
-            direction = torch.FloatTensor([0.0, 1.0])
+            direction_tensor = torch.FloatTensor([0.0, 1.0])
         else:
-            direction = torch.FloatTensor([1.0, 0.0])
-        return image, hidden_state, direction, exp, timestep, DI, info
+            direction_tensor = torch.FloatTensor([1.0, 0.0])
+
+        if flipped:
+            direction_tensor = torch.flip(direction_tensor, dims=(0,))
+            if self.signed_feature_indices:
+                info = info.clone()
+                info[self.signed_feature_indices] *= -1.0
+        if self.condition_perturb:
+            # Apply small multiplicative perturbation on train conditions only.
+            if self.condition_perturb_on_hidden:
+                hidden_state = self._apply_condition_perturbation(hidden_state)
+            if self.condition_perturb_on_info:
+                info = self._apply_condition_perturbation(info)
+            if self.condition_perturb_on_di:
+                DI = self._apply_condition_perturbation(DI)
+        if self.use_loss_mask:
+            return image, hidden_state, direction_tensor, exp, timestep, DI, info, loss_mask
+        return image, hidden_state, direction_tensor, exp, timestep, DI, info
         
 
     def __len__(self):

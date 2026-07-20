@@ -154,8 +154,8 @@ class VQGAN(pl.LightningModule):
             image_array = np.concatenate([x[i].cpu().numpy(), xrec[i].detach().cpu().numpy()], axis=1)
             image_array = np.transpose(image_array, (1, 2, 0))
             images.append(Image.fromarray(((image_array + 1) * 127.5).astype(np.uint8)))
-        
-        wandb.log({"Images": [wandb.Image(image) for image in images]})
+        if wandb.run is not None:
+            wandb.log({"Images": [wandb.Image(image) for image in images]})
     
     def on_train_epoch_start(self):
         self.log('Learning rate', self.trainer.optimizers[0].param_groups[0]['lr'])
@@ -302,8 +302,8 @@ class VAE(pl.LightningModule):
             image_array = np.concatenate([x[i].cpu().numpy(), xrec[i].detach().cpu().numpy()], axis=1)
             image_array = np.transpose(image_array, (1, 2, 0))
             images.append(Image.fromarray(((image_array + 1) * 127.5).astype(np.uint8)))
-        
-        wandb.log({"Images": [wandb.Image(image) for image in images]})
+        if wandb.run is not None:
+            wandb.log({"Images": [wandb.Image(image) for image in images]})
     
     def on_train_epoch_start(self):
         self.log('Learning rate', self.trainer.optimizers[0].param_groups[0]['lr'])

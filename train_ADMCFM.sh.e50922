@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "/Data/home/samfang802/intership-project/train_mixed.py", line 2, in <module>
+    import lightning.pytorch as pl
+ModuleNotFoundError: No module named 'lightning'
