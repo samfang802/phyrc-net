@@ -1,4 +1,5 @@
 import os, json, torch, glob, argparse, importlib
+import torch.nn.functional as F
 import pandas as pd
 import numpy as np
 from torchvision import transforms
@@ -239,6 +240,9 @@ class PatternLoopDataset(Dataset):
         self.image_list = json.load(open(os.path.join(self.root, "DamagePattern", data_path)))[mode]
         self.label = pd.read_csv(os.path.join(self.root, "DamagePattern", "label.csv"))
         self.label = self.label[self.label["filename"].isin(self.image_list)]
+        self.base_size = int(self.label.shape[0])
+        train_virtual_repeat = max(1, int(kwargs.get("train_virtual_repeat", 1)))
+        self.virtual_repeat_factor = train_virtual_repeat if self.mode == "train" else 1
         self.exp_list = self.label['exp'].unique()
         print("Extracting hidden state...")
         self.info = pd.read_csv(os.path.join(self.root, "Hysteresis", f"info_w_mander_big.csv")).loc[:, column_info]
@@ -256,6 +260,20 @@ class PatternLoopDataset(Dataset):
         self.hysteresis = {}
         self.hidden_state = self.get_hidden_state(extractor, self.exp_list, result_dir=result_dir)
         self.use_loss_mask = bool(kwargs.get("use_loss_mask", False))
+        self.mask_dir = os.path.join(self.root, "DamagePattern", "mask")
+        self.use_object_loss_mask = bool(kwargs.get("use_object_loss_mask", True))
+        self.image_size = int(kwargs.get("image_size", 128))
+        self._missing_object_mask = set()
+        self.use_damage_mask_condition = bool(kwargs.get("use_damage_mask_condition", False))
+        self.damage_mask_sigma_min = float(kwargs.get("damage_mask_sigma_min", 4.0))
+        self.damage_mask_sigma_max = float(kwargs.get("damage_mask_sigma_max", 20.0))
+        self.damage_mask_max_di = max(float(kwargs.get("damage_mask_max_di", 1.0)), 1e-6)
+        self.damage_mask_split_di = float(kwargs.get("damage_mask_split_di", 0.5))
+        self.damage_mask_elastic_intensity_cap = float(kwargs.get("damage_mask_elastic_intensity_cap", 0.08))
+        self.damage_mask_elastic_spread_min = float(kwargs.get("damage_mask_elastic_spread_min", 0.15))
+        self.damage_mask_elastic_spread_max = float(kwargs.get("damage_mask_elastic_spread_max", 0.20))
+        self.damage_mask_width_scale = max(float(kwargs.get("damage_mask_width_scale", 2.0)), 1e-6)
+        self.damage_mask_quadratic_scale = float(kwargs.get("damage_mask_quadratic_scale", 0.8))
         self.condition_perturb = bool(kwargs.get("condition_perturb", False)) and self.mode == "train"
         self.condition_perturb_dist = str(kwargs.get("condition_perturb_dist", "uniform")).lower()
         perturb_min = float(kwargs.get("condition_perturb_min", 0.01))
@@ -288,14 +306,98 @@ class PatternLoopDataset(Dataset):
         noise = self._sample_relative_noise(tensor.shape, tensor.device, tensor.dtype)
         return tensor * (1.0 + noise)
 
+    @staticmethod
+    def _bottom_band_damage_profile(di_scaled, height):
+        """Bottom-initiated half-Gaussian profile active only when DI > 0.5."""
+        if di_scaled <= 0.5:
+            return False, 0.0, 0.0
+        normalized_di = (di_scaled - 0.5) / 0.5
+        normalized_di = max(0.0, min(float(normalized_di), 1.0))
+        intensity = 0.8 * normalized_di
+        sigma_y = float(height) * 0.1 + float(height) * 0.2 * normalized_di
+        return True, intensity, max(sigma_y, 1e-6)
+
+    def _resolve_object_mask_path(self, filename):
+        stem, _ = os.path.splitext(str(filename))
+        candidates = [
+            os.path.join(self.mask_dir, f"{stem}_mask.png"),
+            os.path.join(self.mask_dir, f"{stem}.png"),
+            os.path.join(self.mask_dir, str(filename)),
+        ]
+        for path in candidates:
+            if os.path.exists(path):
+                return path
+        return None
+
+    def _load_valid_mask(self, filename, height, width, device, dtype, flipped=False):
+        if not self.use_object_loss_mask:
+            return torch.ones((1, height, width), device=device, dtype=dtype)
+
+        mask_path = self._resolve_object_mask_path(filename)
+        if mask_path is None:
+            if filename not in self._missing_object_mask:
+                print(f"[PatternLoopDataset] object mask not found for {filename}; fallback to all-ones mask", flush=True)
+                self._missing_object_mask.add(filename)
+            return torch.ones((1, height, width), device=device, dtype=dtype)
+
+        mask_np = np.array(Image.open(mask_path).convert("L"), dtype=np.float32)
+        mask_tensor = torch.from_numpy(mask_np).unsqueeze(0).to(device=device, dtype=dtype)
+        if mask_tensor.shape[-2:] != (height, width):
+            mask_tensor = F.interpolate(mask_tensor.unsqueeze(0), size=(height, width), mode="nearest").squeeze(0)
+        if flipped:
+            mask_tensor = torch.flip(mask_tensor, dims=(-1,))
+
+        valid_mask = 1.0 - (mask_tensor / 255.0)
+        return valid_mask.clamp_(0.0, 1.0)
+
+    def _load_object_mask_tensor(self, filename, image_size):
+        """Load rebar object mask as (1, H, W) float tensor before geometric augmentations."""
+        if not self.use_object_loss_mask:
+            return None
+
+        mask_path = self._resolve_object_mask_path(filename)
+        if mask_path is None:
+            if filename not in self._missing_object_mask:
+                print(f"[PatternLoopDataset] object mask not found for {filename}; fallback to all-ones mask", flush=True)
+                self._missing_object_mask.add(filename)
+            return torch.ones((1, image_size, image_size), dtype=torch.float32)
+
+        mask_np = np.array(Image.open(mask_path).convert("L"), dtype=np.float32)
+        mask_tensor = torch.from_numpy(mask_np).unsqueeze(0)
+        if mask_tensor.shape[-2:] != (image_size, image_size):
+            mask_tensor = F.interpolate(
+                mask_tensor.unsqueeze(0),
+                size=(image_size, image_size),
+                mode="nearest",
+            ).squeeze(0)
+        valid_mask = 1.0 - (mask_tensor / 255.0)
+        return valid_mask.clamp_(0.0, 1.0)
+
+    def _build_damage_mask(self, di_value, height, width, device, dtype):
+        di_scaled = max(0.0, min(float(di_value) / self.damage_mask_max_di, 1.0))
+        is_active, intensity_scale, sigma_y = self._bottom_band_damage_profile(di_scaled, height)
+        if not is_active:
+            return torch.zeros((1, height, width), device=device, dtype=dtype)
+
+        y = torch.arange(height, device=device, dtype=dtype).view(height, 1)
+        gaussian_1d = torch.exp(-((y - float(height)) ** 2) / (2.0 * sigma_y * sigma_y))
+        mask = intensity_scale * gaussian_1d.expand(height, width)
+        return mask.unsqueeze(0)
 
     def __getitem__(self, index):
-        filename, exp, direction, timestep, DI = self.label.iloc[index, :].values
+        if self.base_size == 0:
+            raise IndexError("PatternLoopDataset is empty.")
+        real_idx = int(index) % self.base_size
+        filename, exp, direction, timestep, DI = self.label.iloc[real_idx, :].values
         image = Image.open(os.path.join(self.root, "DamagePattern", "images", filename))
         info = self.info[self.info["id"]==exp].iloc[:, 1:].values.squeeze()
         info = torch.FloatTensor(info)
         hidden_state = self.hidden_state[exp][int(timestep), :]
-        image = self.transform(image)
+        object_mask = self._load_object_mask_tensor(filename, self.image_size)
+        try:
+            image = self.transform(image, object_mask=object_mask)
+        except TypeError:
+            image = self.transform(image)
         flipped = False
         if isinstance(image, dict):
             loss_mask = image.get("loss_mask", None)
@@ -305,6 +407,16 @@ class PatternLoopDataset(Dataset):
             loss_mask = None
         if loss_mask is None:
             loss_mask = torch.ones((1, image.shape[-2], image.shape[-1]), dtype=image.dtype)
+        elif object_mask is None and self.use_object_loss_mask:
+            valid_mask = self._load_valid_mask(
+                filename,
+                image.shape[-2],
+                image.shape[-1],
+                device=image.device,
+                dtype=image.dtype,
+                flipped=flipped,
+            )
+            loss_mask = loss_mask * valid_mask
         DI = torch.FloatTensor([DI])
         if direction == "Pull":
             direction_tensor = torch.FloatTensor([0.0, 1.0])
@@ -324,13 +436,27 @@ class PatternLoopDataset(Dataset):
                 info = self._apply_condition_perturbation(info)
             if self.condition_perturb_on_di:
                 DI = self._apply_condition_perturbation(DI)
+        damage_mask = None
+        # Spatial damage mask injection disabled: only hysteretic scalar conditions are used.
+        if self.use_damage_mask_condition:
+            damage_mask = self._build_damage_mask(
+                DI.item(),
+                image.shape[-2],
+                image.shape[-1],
+                device=image.device,
+                dtype=image.dtype,
+            )
         if self.use_loss_mask:
+            if damage_mask is not None:
+                return image, hidden_state, direction_tensor, exp, timestep, DI, info, loss_mask, damage_mask
             return image, hidden_state, direction_tensor, exp, timestep, DI, info, loss_mask
+        if damage_mask is not None:
+            return image, hidden_state, direction_tensor, exp, timestep, DI, info, damage_mask
         return image, hidden_state, direction_tensor, exp, timestep, DI, info
         
 
     def __len__(self):
-        return self.label.shape[0]
+        return self.base_size * self.virtual_repeat_factor
     
     def get_hidden_state(self, extractor, exp_list, result_dir):
         hidden_state = {}
