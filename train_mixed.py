@@ -120,7 +120,7 @@ if __name__ == "__main__":
                 filename="best_val_loss_{val/loss:.4f}",
             )
         )
-        if args.metrics_every_n_epochs <= args.val_every_n_epoch:
+        if args.metrics_every_n_epochs <= args.val_check_interval:
             callback_list.append(
                 pl.callbacks.ModelCheckpoint(
                     monitor="val/fid",
@@ -164,6 +164,10 @@ if __name__ == "__main__":
         output_scale=True,
         normalize_mean=(0.5, 0.5, 0.5),
         normalize_std=(0.5, 0.5, 0.5),
+        use_grayscale_input=args.use_grayscale_input,
+        use_clahe=args.use_clahe,
+        clahe_clip_limit=args.clahe_clip_limit,
+        clahe_tile_grid_size=args.clahe_tile_grid_size,
         aug_prob=args.aug_prob,
         aug_blur_prob=args.aug_blur_prob,
         aug_brightness=args.aug_brightness,
@@ -173,7 +177,7 @@ if __name__ == "__main__":
         aug_translate=args.aug_translate,
         aug_scale_min=args.aug_scale_min,
         aug_scale_max=args.aug_scale_max,
-        aug_affine=args.aug_affine,
+        use_random_affine=args.use_random_affine,
         aug_hflip_prob=args.aug_hflip_prob,
         aug_blur_kernel=args.aug_blur_kernel,
         aug_blur_sigma_min=args.aug_blur_sigma_min,
@@ -191,8 +195,20 @@ if __name__ == "__main__":
         output_scale=True,
         normalize_mean=(0.5, 0.5, 0.5),
         normalize_std=(0.5, 0.5, 0.5),
+        use_grayscale_input=args.use_grayscale_input,
+        use_clahe=args.use_clahe,
+        clahe_clip_limit=args.clahe_clip_limit,
+        clahe_tile_grid_size=args.clahe_tile_grid_size,
     )
-    print(f"[train_mixed] img_aug={args.img_aug} aug_erase_prob={args.aug_erase_prob}", flush=True)
+    print(
+        f"[train_mixed] img_aug={args.img_aug} use_grayscale_input={args.use_grayscale_input} "
+        f"use_clahe={args.use_clahe} clahe_clip_limit={args.clahe_clip_limit} "
+        f"clahe_tile_grid_size={args.clahe_tile_grid_size} "
+        f"use_random_affine={args.use_random_affine} "
+        f"aug_brightness={args.aug_brightness} aug_contrast={args.aug_contrast} "
+        f"aug_translate={args.aug_translate} aug_erase_prob={args.aug_erase_prob}",
+        flush=True,
+    )
     
     # Load extractor
     if not args.extractor_path:
@@ -213,6 +229,17 @@ if __name__ == "__main__":
     
     
     num_workers = _resolve_num_workers(args.num_workers)
+    # Build once so we don't pass the same keyword twice via **vars(args).
+    dataset_kwargs = dict(vars(args))
+    dataset_kwargs["use_loss_mask"] = True
+    dataset_kwargs["use_damage_mask_condition"] = (
+        args.architecture == "CFMADM" and bool(args.use_damage_mask_condition)
+    )
+    print(
+        f"[train_mixed] use_damage_mask_condition={dataset_kwargs['use_damage_mask_condition']} "
+        f"cfg_scale={getattr(args, 'cfg_scale', 1.0)}",
+        flush=True,
+    )
     print("[train_mixed] Building train dataset (hidden-state extraction may take several minutes)...", flush=True)
     train_ds = PatternLoopDataset(
         root="./Data",
@@ -220,8 +247,7 @@ if __name__ == "__main__":
         transform=train_transform,
         extractor=extractor,
         extractor_args=extractor_args,
-        use_loss_mask=True,
-        **vars(args),
+        **dataset_kwargs,
     )
     print("[train_mixed] Building val dataset (hidden-state extraction may take several minutes)...", flush=True)
     val_ds = PatternLoopDataset(
@@ -230,8 +256,7 @@ if __name__ == "__main__":
         transform=val_transform,
         extractor=extractor,
         extractor_args=extractor_args,
-        use_loss_mask=True,
-        **vars(args),
+        **dataset_kwargs,
     )
     print(f"[train_mixed] train={len(train_ds)} val={len(val_ds)}", flush=True)
     _save_augmented_grid_preview(train_ds, args.result_dir, num_images=100, grid_size=10)
@@ -241,6 +266,7 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=num_workers,
+        drop_last=True,
     )
     val_dataloader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=num_workers)
     
@@ -293,8 +319,10 @@ if __name__ == "__main__":
         devices = 1,
         logger = logger,
         log_every_n_steps=2,
-        check_val_every_n_epoch=args.val_every_n_epoch,
-        max_epochs = args.epoch + 1,
+        check_val_every_n_epoch=None,
+        val_check_interval=args.val_check_interval,
+        max_steps=args.max_steps,
+        max_epochs=-1,
         num_sanity_val_steps=min(2, len(val_dataloader)),
         callbacks = callback_list
     )

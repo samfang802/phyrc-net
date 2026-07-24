@@ -4,6 +4,26 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def _num_groups(channels, max_groups=32):
+    """Pick the largest GroupNorm group count that divides ``channels``."""
+    groups = min(max_groups, channels)
+    while groups > 1 and channels % groups != 0:
+        groups -= 1
+    return max(1, groups)
+
+
+def _expand_conv_in_with_zero_mask_channel(conv_in):
+    """Expand conv_in from C to C+1 channels with zero-init extra channel."""
+    out_ch, in_ch, kh, kw = conv_in.weight.shape
+    expanded = nn.Conv2d(in_ch + 1, out_ch, kernel_size=conv_in.kernel_size, stride=conv_in.stride, padding=conv_in.padding)
+    with torch.no_grad():
+        expanded.weight[:, :in_ch, :, :] = conv_in.weight
+        expanded.weight[:, in_ch:, :, :] = 0.0
+        if conv_in.bias is not None:
+            expanded.bias.copy_(conv_in.bias)
+    return expanded
+
+
 def sinusoidal_timestep_embedding(t, dim, max_period=10000):
     half = dim // 2
     freqs = torch.exp(-math.log(max_period) * torch.arange(0, half, device=t.device, dtype=torch.float32) / max(half, 1))
@@ -36,7 +56,7 @@ class Upsample(nn.Module):
 class SelfAttention2d(nn.Module):
     def __init__(self, channels):
         super().__init__()
-        self.norm = nn.GroupNorm(32 if channels >= 32 else 1, channels)
+        self.norm = nn.GroupNorm(_num_groups(channels), channels)
         self.qkv = nn.Conv2d(channels, channels * 3, kernel_size=1)
         self.proj = nn.Conv2d(channels, channels, kernel_size=1)
 
@@ -60,10 +80,8 @@ class AdaGNResBlock(nn.Module):
         self.in_channels = in_channels
         self.out_channels = out_channels
 
-        groups_in = 32 if in_channels >= 32 else 1
-        groups_out = 32 if out_channels >= 32 else 1
-        self.norm1 = nn.GroupNorm(groups_in, in_channels, eps=1e-6)
-        self.norm2 = nn.GroupNorm(groups_out, out_channels, eps=1e-6)
+        self.norm1 = nn.GroupNorm(_num_groups(in_channels), in_channels, eps=1e-6)
+        self.norm2 = nn.GroupNorm(_num_groups(out_channels), out_channels, eps=1e-6)
 
         self.ada1 = nn.Linear(cond_dim, in_channels * 2)
         self.ada2 = nn.Linear(cond_dim, out_channels * 2)
@@ -107,10 +125,12 @@ class ADMUNetCFM(nn.Module):
         latent_dim=512,
         dropout=0.0,
         use_mid_attention=True,
+        use_damage_mask_condition=False,
     ):
         super().__init__()
         self.model_channels = model_channels
         self.cond_dim = cond_dim
+        self.use_damage_mask_condition = bool(use_damage_mask_condition)
 
         self.time_mlp = nn.Sequential(
             nn.Linear(model_channels, cond_dim),
@@ -127,7 +147,12 @@ class ADMUNetCFM(nn.Module):
             nn.Linear(cond_dim, cond_dim),
         )
 
-        self.in_conv = nn.Conv2d(in_channels, model_channels, kernel_size=3, padding=1)
+        base_in_conv = nn.Conv2d(in_channels, model_channels, kernel_size=3, padding=1)
+        if self.use_damage_mask_condition:
+            # Spatial damage-mask channel is concatenated at input.
+            self.in_conv = _expand_conv_in_with_zero_mask_channel(base_in_conv)
+        else:
+            self.in_conv = base_in_conv
 
         self.down_blocks = nn.ModuleList()
         self.downsamples = nn.ModuleList()
@@ -161,7 +186,7 @@ class ADMUNetCFM(nn.Module):
             if level != 0:
                 self.upsamples.append(Upsample(ch))
 
-        self.out_norm = nn.GroupNorm(32 if ch >= 32 else 1, ch, eps=1e-6)
+        self.out_norm = nn.GroupNorm(_num_groups(ch), ch, eps=1e-6)
         self.out_conv = nn.Conv2d(ch, out_channels, kernel_size=3, padding=1)
 
     def _build_cond(self, t, c):
@@ -170,9 +195,43 @@ class ADMUNetCFM(nn.Module):
         c_emb = self.cond_mlp(c)
         return self.joint_mlp(t_emb + c_emb)
 
-    def forward(self, z_t, t, c):
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
+        # Backward compatibility for in_conv channel mismatches across mask/no-mask configs.
+        conv_key = f"{prefix}in_conv.weight"
+        if conv_key in state_dict:
+            ckpt_weight = state_dict[conv_key]
+            expected_in = self.in_conv.in_channels
+            if ckpt_weight.ndim == 4:
+                if ckpt_weight.shape[1] == expected_in - 1:
+                    zero_channel = torch.zeros(
+                        (ckpt_weight.shape[0], 1, ckpt_weight.shape[2], ckpt_weight.shape[3]),
+                        dtype=ckpt_weight.dtype,
+                        device=ckpt_weight.device,
+                    )
+                    state_dict[conv_key] = torch.cat([ckpt_weight, zero_channel], dim=1)
+                elif ckpt_weight.shape[1] == expected_in + 1:
+                    state_dict[conv_key] = ckpt_weight[:, :expected_in, :, :]
+        super()._load_from_state_dict(
+            state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
+        )
+
+    def forward(self, z_t, t, c, damage_mask=None):
         cond = self._build_cond(t, c)
-        h = self.in_conv(z_t)
+        if self.use_damage_mask_condition:
+            if damage_mask is None:
+                damage_mask = torch.zeros(
+                    (z_t.shape[0], 1, z_t.shape[-2], z_t.shape[-1]),
+                    device=z_t.device,
+                    dtype=z_t.dtype,
+                )
+            if damage_mask.ndim == 3:
+                damage_mask = damage_mask.unsqueeze(1)
+            damage_mask = damage_mask.to(device=z_t.device, dtype=z_t.dtype)
+            if damage_mask.shape[-2:] != z_t.shape[-2:]:
+                damage_mask = F.interpolate(damage_mask, size=z_t.shape[-2:], mode="bilinear", align_corners=False)
+            h = self.in_conv(torch.cat([z_t, damage_mask], dim=1))
+        else:
+            h = self.in_conv(z_t)
         skips = []
 
         for i, blocks in enumerate(self.down_blocks):

@@ -9,6 +9,7 @@ from matplotlib.lines import Line2D
 
 
 import torch
+import torch.nn.functional as F
 from src.model.Component.generative import DCGAN_D, DCGAN_G, weights_init
 from src.model.Component.cfm_adm import ADMUNetCFM
 from torchmetrics.image.fid import FrechetInceptionDistance
@@ -31,7 +32,11 @@ def build_generation_condition(
     latent_conditioning,
     direction_conditioning,
     include_di_conditioning,
+    condition_mode="full",
 ):
+    if condition_mode == "di_only":
+        return DI
+
     if latent_conditioning:
         parts = [hidden_state]
         if direction_conditioning:
@@ -79,6 +84,11 @@ class HystereticCGAN(pl.LightningModule):
         self.latent_conditioning = latent_conditioning
         self.direction_conditioning = direction_conditioning
         self.include_di_conditioning = kwargs.get("include_di_conditioning", False)
+        self.condition_mode = str(kwargs.get("condition_mode", "full")).lower()
+        self.use_damage_mask_condition = bool(kwargs.get("use_damage_mask_condition", False))
+        self.damage_mask_sigma_min = float(kwargs.get("damage_mask_sigma_min", 4.0))
+        self.damage_mask_sigma_max = float(kwargs.get("damage_mask_sigma_max", 20.0))
+        self.damage_mask_max_di = max(float(kwargs.get("damage_mask_max_di", 1.0)), 1e-6)
         self.add_DI_loss = add_DI_loss
         self.lr_schedule = kwargs.get("lr_schedule", "constant")
         self.warmup_epochs = kwargs.get("warmup_epochs", 5)
@@ -144,6 +154,7 @@ class HystereticCGAN(pl.LightningModule):
             self.latent_conditioning,
             self.direction_conditioning,
             self.include_di_conditioning,
+            self.condition_mode,
         )
         
     
@@ -442,17 +453,36 @@ class CFMADM(pl.LightningModule):
         self.latent_conditioning = latent_conditioning
         self.direction_conditioning = direction_conditioning
         self.include_di_conditioning = kwargs.get("include_di_conditioning", False)
+        self.condition_mode = str(kwargs.get("condition_mode", "full")).lower()
+        self.use_damage_mask_condition = bool(kwargs.get("use_damage_mask_condition", False))
+        self.damage_mask_sigma_min = float(kwargs.get("damage_mask_sigma_min", 4.0))
+        self.damage_mask_sigma_max = float(kwargs.get("damage_mask_sigma_max", 20.0))
+        self.damage_mask_max_di = max(float(kwargs.get("damage_mask_max_di", 1.0)), 1e-6)
+        self.damage_mask_split_di = float(kwargs.get("damage_mask_split_di", 0.5))
+        self.damage_mask_elastic_intensity_cap = float(kwargs.get("damage_mask_elastic_intensity_cap", 0.08))
+        self.damage_mask_elastic_spread_min = float(kwargs.get("damage_mask_elastic_spread_min", 0.15))
+        self.damage_mask_elastic_spread_max = float(kwargs.get("damage_mask_elastic_spread_max", 0.20))
+        self.damage_mask_width_scale = max(float(kwargs.get("damage_mask_width_scale", 2.0)), 1e-6)
+        self.damage_mask_quadratic_scale = float(kwargs.get("damage_mask_quadratic_scale", 0.8))
+        self.grad_clip_max_norm = float(kwargs.get("grad_clip_max_norm", 2.0))
         self.add_DI_loss = add_DI_loss
         self.cfm_ode_steps = cfm_ode_steps
         self.cfm_solver = cfm_solver.lower()
         self.lr_schedule = kwargs.get("lr_schedule", "constant")
         self.warmup_epochs = kwargs.get("warmup_epochs", 5)
+        self.warmup_steps = int(kwargs.get("warmup_steps", 800))
         self.min_lr_ratio = kwargs.get("min_lr_ratio", 0.1)
         self.total_epochs = kwargs.get("epoch", 10) + 1
+        self.total_steps = int(kwargs.get("max_steps", 15000))
         self.optimizer_name = str(kwargs.get("optimizer", "adamw")).lower()
         self.inference_every_n_epochs = max(1, int(kwargs.get("inference_every_n_epochs", 10)))
         self.inference_num_images = max(1, int(kwargs.get("inference_num_images", 6)))
         self.metrics_every_n_epochs = max(1, int(kwargs.get("metrics_every_n_epochs", 100)))
+        self.cfg_scale = float(kwargs.get("cfg_scale", 1.0))
+        self.use_velocity_min_snr_weighting = bool(kwargs.get("use_velocity_min_snr_weighting", True))
+        self.min_snr_gamma = float(kwargs.get("min_snr_gamma", 5.0))
+        self.inference_anchor_exp = str(kwargs.get("inference_anchor_exp", "")).strip()
+        self.inference_anchor_timestep = int(kwargs.get("inference_anchor_timestep", -1))
         self.fixed_di_values = _parse_fixed_di_values(
             kwargs.get("fixed_di_values", "0.0,0.4,0.75,0.95"),
             self.inference_num_images,
@@ -488,7 +518,14 @@ class CFMADM(pl.LightningModule):
 
             self.vae_scaling_factor = float(getattr(self.vae.config, "scaling_factor", 1.0))
             self.vae_shift_factor = float(getattr(self.vae.config, "shift_factor", 0.0))
-            self.model_in_channels = int(getattr(self.vae.config, "latent_channels", 16))
+            configured_latent_channels = int(getattr(self.vae.config, "latent_channels", 4))
+            self.model_in_channels = 4
+            if configured_latent_channels != self.model_in_channels:
+                print(
+                    f"[CFM] Overriding VAE latent_channels={configured_latent_channels} to {self.model_in_channels} "
+                    f"for 4-latent + 1-mask input design.",
+                    flush=True,
+                )
             self.vae_downsample_factor = int(
                 getattr(
                     self.vae.config,
@@ -512,12 +549,27 @@ class CFMADM(pl.LightningModule):
             latent_dim=condition_dim,
             dropout=cfm_dropout,
             use_mid_attention=False,
+            use_damage_mask_condition=self.use_damage_mask_condition,
+        )
+        cond_mlp_in = int(self.velocity_net.cond_mlp[0].in_features)
+        if cond_mlp_in != int(self.condition_dim):
+            raise ValueError(
+                f"Condition dimension mismatch: condition_dim={self.condition_dim}, "
+                f"cond_mlp.in_features={cond_mlp_in}"
+            )
+        print(
+            f"[CFM] condition_mode={self.condition_mode} condition_dim={self.condition_dim} "
+            f"-> cond_mlp.in_features={cond_mlp_in} cond_dim={cfm_cond_dim} "
+            f"in_conv.in_channels={self.velocity_net.in_conv.in_channels}",
+            flush=True,
         )
 
         self.psnr = PeakSignalNoiseRatio(data_range=1.0)
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0)
         self.fid = FrechetInceptionDistance(feature=2048, reset_real_features=False, normalize=True)
         self.validation_outputs = {"gt_DI": [], "pred_DI": [], "anchor_candidates": []}
+        self._has_logged_initial_inference = False
+        self._fixed_inference_anchor = None
 
         self.regressor = kwargs.get("regressor", None)
         if self.add_DI_loss:
@@ -528,6 +580,12 @@ class CFMADM(pl.LightningModule):
                 v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ])
 
+    def _compute_velocity_min_snr_weight(self, t):
+        """Min-SNR-gamma weighting for velocity prediction loss."""
+        t_clamped = t.clamp(min=1e-5, max=1.0 - 1e-5)
+        snr = (t_clamped / (1.0 - t_clamped)) ** 2
+        return torch.clamp(snr, max=self.min_snr_gamma) / (snr + 1.0)
+
     def _vae_context(self):
         if self.vae is None:
             return nullcontext()
@@ -535,6 +593,18 @@ class CFMADM(pl.LightningModule):
         if self.device.type == "cuda" and vae_dtype == torch.float16:
             return torch.autocast(device_type="cuda", dtype=torch.float16)
         return nullcontext()
+
+    def on_fit_start(self):
+        if wandb.run is not None:
+            wandb.define_metric("trainer/global_step")
+            wandb.define_metric("*", step_metric="trainer/global_step")
+            wandb.define_metric("train/loss", step_metric="trainer/global_step")
+            wandb.define_metric("train/fm_loss", step_metric="trainer/global_step")
+            wandb.define_metric("train/grad_norm_L2", step_metric="trainer/global_step")
+            wandb.define_metric("train/lr", step_metric="trainer/global_step")
+            wandb.define_metric("val/loss", step_metric="trainer/global_step")
+            wandb.define_metric("CFM/FixedDI/*", step_metric="trainer/global_step")
+        self._save_damage_mask_preview()
 
     def _encode_to_target_space(self, image_tensor):
         if self.vae is None:
@@ -567,60 +637,194 @@ class CFMADM(pl.LightningModule):
             self.latent_conditioning,
             self.direction_conditioning,
             self.include_di_conditioning,
+            self.condition_mode,
         )
 
     def _should_log_metrics(self):
-        epoch_num = self.current_epoch + 1
-        return epoch_num % self.metrics_every_n_epochs == 0
+        if self.trainer is not None and self.trainer.sanity_checking:
+            return False
+        step_num = int(self.global_step)
+        if step_num <= 0:
+            return False
+        return step_num % self.metrics_every_n_epochs == 0
 
     def _should_run_inference(self):
-        epoch_num = self.current_epoch + 1
-        return (self.current_epoch == 0) or (epoch_num % self.inference_every_n_epochs == 0)
+        if self.trainer is not None and self.trainer.sanity_checking:
+            return False
+        step_num = int(self.global_step)
+        if not self._has_logged_initial_inference and step_num > 0:
+            return True
+        if step_num <= 0:
+            return False
+        return step_num % self.inference_every_n_epochs == 0
 
     def _get_inference_di_values(self):
         # Use fixed DI values for stable, comparable inference panels.
         return [float(v) for v in self.fixed_di_values[: self.inference_num_images]]
 
     @staticmethod
+    def _bottom_band_damage_profile(di_scaled, height):
+        """Bottom-initiated half-Gaussian profile active only when DI > 0.5."""
+        active = di_scaled > 0.5
+        normalized_di = torch.clamp((di_scaled - 0.5) / 0.5, min=0.0, max=1.0)
+        intensity = 0.8 * normalized_di
+        sigma_y = float(height) * 0.1 + float(height) * 0.3 * normalized_di
+        return active, intensity, torch.clamp(sigma_y, min=1e-6)
+
+    def _build_damage_mask_from_di(self, di_tensor, height, width, device, dtype):
+        if not self.use_damage_mask_condition:
+            return torch.zeros((di_tensor.shape[0], 1, height, width), device=device, dtype=dtype)
+        di_scaled = torch.clamp(di_tensor.to(device=device, dtype=dtype) / self.damage_mask_max_di, min=0.0, max=1.0).view(-1, 1, 1)
+        active, intensity, sigma_y = self._bottom_band_damage_profile(di_scaled, height)
+        y = torch.arange(height, device=device, dtype=dtype).view(1, height, 1)
+        gaussian_1d = torch.exp(-((y - float(height)) ** 2) / (2.0 * sigma_y ** 2))
+        mask = intensity * gaussian_1d.expand(-1, -1, width)
+        mask = torch.where(active, mask, torch.zeros_like(mask))
+        return mask.unsqueeze(1)
+
+    @staticmethod
+    def _ensure_single_channel_mask(mask, target_shape, device, dtype):
+        if mask is None:
+            return torch.zeros(target_shape, device=device, dtype=dtype)
+        if mask.ndim == 3:
+            mask = mask.unsqueeze(1)
+        if mask.shape[1] != 1:
+            mask = mask[:, :1, :, :]
+        mask = mask.to(device=device, dtype=dtype)
+        if mask.shape[-2:] != target_shape[-2:]:
+            mask = F.interpolate(mask, size=target_shape[-2:], mode="bilinear", align_corners=False)
+        return mask
+
+    def _save_damage_mask_preview(self):
+        if not self.use_damage_mask_condition:
+            return
+        preview_values = sorted(set([0.0, 0.5] + [float(v) for v in self.fixed_di_values]))
+        di_tensor = torch.tensor(preview_values, device=self.device, dtype=torch.float32)
+        masks = self._build_damage_mask_from_di(
+            di_tensor,
+            self.model_spatial_size,
+            self.model_spatial_size,
+            device=self.device,
+            dtype=torch.float32,
+        ).detach().cpu()
+
+        fig, axes = plt.subplots(1, len(preview_values), figsize=(max(6, 2 * len(preview_values)), 2.5))
+        if len(preview_values) == 1:
+            axes = [axes]
+        for idx, di_value in enumerate(preview_values):
+            ax = axes[idx]
+            ax.imshow(masks[idx, 0].numpy(), cmap="hot", vmin=0.0, vmax=1.0)
+            ax.set_title(f"DI={di_value:.2f}")
+            ax.axis("off")
+        fig.suptitle("Damage Mask Preview (1-Channel)", fontsize=11)
+        plt.tight_layout()
+        out_dir = os.path.join(self.result_dir, "data_check")
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, "damage_mask_preview.png")
+        fig.savefig(out_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"[CFM] Saved damage-mask preview: {out_path}", flush=True)
+
+    def _select_fixed_anchor(self, candidates):
+        if self._fixed_inference_anchor is not None:
+            return self._fixed_inference_anchor
+        pool = candidates
+        if self.inference_anchor_exp:
+            filtered = [c for c in candidates if str(c["exp"]) == self.inference_anchor_exp]
+            if filtered:
+                pool = filtered
+        if not pool:
+            return None
+        if self.inference_anchor_timestep >= 0:
+            anchor = min(pool, key=lambda c: abs(int(c["timestep"]) - self.inference_anchor_timestep))
+        else:
+            anchor = sorted(pool, key=lambda c: (str(c["exp"]), int(c["timestep"]), str(c["sample_uid"])))[0]
+        self._fixed_inference_anchor = anchor
+        return anchor
+
+    def _select_anchors_for_di_values(self, candidates, di_values):
+        """Pick one distinct GT sample nearest each target DI (4 GT + 4 inference)."""
+        pool = list(candidates)
+        if self.inference_anchor_exp:
+            filtered = [c for c in pool if str(c["exp"]) == self.inference_anchor_exp]
+            if filtered:
+                pool = filtered
+        if not pool:
+            return []
+
+        selected = []
+        remaining = list(pool)
+        for di_value in di_values:
+            search = remaining if remaining else pool
+            if self.inference_anchor_timestep >= 0:
+                # Prefer DI match, then timestep proximity as tie-breaker.
+                anchor = min(
+                    search,
+                    key=lambda c: (
+                        abs(float(c["gt_di"]) - float(di_value)),
+                        abs(int(c["timestep"]) - self.inference_anchor_timestep),
+                        str(c["sample_uid"]),
+                    ),
+                )
+            else:
+                anchor = min(
+                    search,
+                    key=lambda c: (
+                        abs(float(c["gt_di"]) - float(di_value)),
+                        str(c["exp"]),
+                        int(c["timestep"]),
+                        str(c["sample_uid"]),
+                    ),
+                )
+            selected.append(anchor)
+            remaining = [c for c in remaining if c["sample_uid"] != anchor["sample_uid"]]
+        return selected
+
+    @staticmethod
     def _unpack_generation_batch(batch):
         if len(batch) >= 8:
-            real_data, hidden_state, direction, exp, timestep, DI, info, loss_mask = batch[:8]
+            real_data, hidden_state, direction, exp, timestep, DI, info, valid_mask = batch[:8]
         else:
             real_data, hidden_state, direction, exp, timestep, DI, info = batch
-            loss_mask = torch.ones(
+            valid_mask = torch.ones(
                 (real_data.shape[0], 1, real_data.shape[-2], real_data.shape[-1]),
                 device=real_data.device,
                 dtype=real_data.dtype,
             )
-        return real_data, hidden_state, direction, exp, timestep, DI, info, loss_mask
+        return real_data, hidden_state, direction, exp, timestep, DI, info, valid_mask
 
-    def flow_matching_loss(self, z1, c, loss_mask=None):
+    def flow_matching_loss(self, z1, c, valid_mask=None):
         b = z1.shape[0]
-        t = torch.rand(b, device=z1.device)
+        t = torch.rand(b, device=z1.device).clamp(min=1e-5, max=1.0 - 1e-5)
         z0 = torch.randn_like(z1)
         zt = (1.0 - t[:, None, None, None]) * z0 + t[:, None, None, None] * z1
         target_u = z1 - z0
-        pred_v = self.velocity_net(zt, t, c)
-        mse = (pred_v - target_u) ** 2
-        if loss_mask is None:
-            return torch.mean(mse)
+        noise_pred = self.velocity_net(zt, t, c)
+        noise_true = target_u
 
-        mask = loss_mask.to(device=mse.device, dtype=mse.dtype)
-        if mask.ndim == 3:
-            mask = mask.unsqueeze(1)
-        if mask.shape[-2:] != mse.shape[-2:]:
-            mask = F.interpolate(mask, size=mse.shape[-2:], mode="nearest")
-        if mask.shape[1] == 1 and mse.shape[1] > 1:
-            mask = mask.expand(-1, mse.shape[1], -1, -1)
-        elif mask.shape[1] != mse.shape[1]:
-            mask = mask.mean(dim=1, keepdim=True).expand(-1, mse.shape[1], -1, -1)
+        unreduced_loss = F.mse_loss(noise_pred, noise_true, reduction="none")
+        if valid_mask is None:
+            per_sample_loss = unreduced_loss.mean(dim=(1, 2, 3))
+        else:
+            valid_mask = valid_mask.to(device=unreduced_loss.device, dtype=unreduced_loss.dtype)
+            if valid_mask.ndim == 3:
+                valid_mask = valid_mask.unsqueeze(1)
+            if valid_mask.shape[-2:] != unreduced_loss.shape[-2:]:
+                valid_mask = F.interpolate(valid_mask, size=unreduced_loss.shape[-2:], mode="nearest")
 
-        weighted = mse * mask
-        denom = mask.sum().clamp_min(1.0)
-        return weighted.sum() / denom
+            masked_loss = unreduced_loss * valid_mask
+            # Normalize by valid pixel count and channel count per sample.
+            valid_count = valid_mask.sum(dim=(1, 2, 3)).clamp_min(1e-8)
+            per_sample_loss = masked_loss.sum(dim=(1, 2, 3)) / (valid_count * unreduced_loss.shape[1])
+
+        if self.use_velocity_min_snr_weighting:
+            min_snr_weight = self._compute_velocity_min_snr_weight(t).to(per_sample_loss.dtype)
+            per_sample_loss = per_sample_loss * min_snr_weight
+
+        return per_sample_loss.mean()
 
     def sample_with_ode(self, c, z0=None, num_steps=None):
-        # Separate ODE solver from training objective.
+        # Separate ODE solver from training objective. CFG and spatial damage mask are disabled.
         if num_steps is None:
             num_steps = self.cfm_ode_steps
         if z0 is None:
@@ -646,10 +850,13 @@ class CFMADM(pl.LightningModule):
         return z
 
     def training_step(self, batch, batch_idx):
-        real_data, hidden_state, direction, exp, timestep, DI, info, loss_mask = self._unpack_generation_batch(batch)
+        real_data, hidden_state, direction, exp, timestep, DI, info, valid_mask = self._unpack_generation_batch(batch)
         c = self.process_condition(info, hidden_state, direction, DI)
         target_space_data = self._encode_to_target_space(real_data)
-        loss_fm = self.flow_matching_loss(target_space_data, c, loss_mask=loss_mask)
+        loss_fm = self.flow_matching_loss(target_space_data, c, valid_mask=valid_mask)
+        if self.trainer is not None and self.trainer.optimizers:
+            current_lr = float(self.trainer.optimizers[0].param_groups[0]["lr"])
+            self.log("train/lr", current_lr, prog_bar=False, on_step=True, on_epoch=False)
 
         if self.add_DI_loss:
             sampled = self.sample_with_ode(c)
@@ -659,20 +866,20 @@ class CFMADM(pl.LightningModule):
             pred_di = self.regressor(sampled_trans, info)
             loss_di = nn.MSELoss()(pred_di, DI)
             loss = loss_fm + loss_di
-            self.log("train/errDI", loss_di, prog_bar=False, on_step=False, on_epoch=True)
+            self.log("train/errDI", loss_di, prog_bar=False, on_step=True, on_epoch=False)
         else:
             loss = loss_fm
 
-        self.log("train/loss", loss, prog_bar=True, on_step=False, on_epoch=True)
-        self.log("train/fm_loss", loss_fm, prog_bar=False, on_step=False, on_epoch=True)
+        self.log("train/loss", loss, prog_bar=True, on_step=True, on_epoch=False)
+        self.log("train/fm_loss", loss_fm, prog_bar=False, on_step=True, on_epoch=False)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        real_data, hidden_state, direction, exp, timestep, DI, info, loss_mask = self._unpack_generation_batch(batch)
+        real_data, hidden_state, direction, exp, timestep, DI, info, valid_mask = self._unpack_generation_batch(batch)
         c = self.process_condition(info, hidden_state, direction, DI)
 
         target_space_data = self._encode_to_target_space(real_data)
-        val_fm_loss = self.flow_matching_loss(target_space_data, c, loss_mask=loss_mask)
+        val_fm_loss = self.flow_matching_loss(target_space_data, c, valid_mask=valid_mask)
         sampled = self.sample_with_ode(c)
         sampled_image = self._decode_from_target_space(sampled)
 
@@ -728,7 +935,6 @@ class CFMADM(pl.LightningModule):
         self.log("val/loss", val_fm_loss, prog_bar=False, on_step=False, on_epoch=True)
 
     def on_validation_epoch_end(self):
-        epoch_num = self.current_epoch + 1
         if self._should_log_metrics():
             psnr = self.psnr.compute()
             ssim = self.ssim.compute()
@@ -744,28 +950,18 @@ class CFMADM(pl.LightningModule):
         candidates = self.validation_outputs["anchor_candidates"]
         if should_infer and len(candidates) > 0:
             di_values = self._get_inference_di_values()
-            selected_anchors = []
-            used_uids = set()
-            for target_di in di_values:
-                ranked = sorted(candidates, key=lambda c: abs(c["gt_di"] - float(target_di)))
-                chosen = None
-                for candidate in ranked:
-                    if candidate["sample_uid"] not in used_uids:
-                        chosen = candidate
-                        break
-                if chosen is None:
-                    continue
-                used_uids.add(chosen["sample_uid"])
-                selected_anchors.append(chosen)
-
-            pair_count = min(len(di_values), len(selected_anchors))
+            anchors = self._select_anchors_for_di_values(candidates, di_values)
+            if not anchors:
+                self.validation_outputs = {"gt_DI": [], "pred_DI": [], "anchor_candidates": []}
+                return
+            pair_count = len(di_values)
             fig, axes = plt.subplots(pair_count, 2, figsize=(6, max(3, pair_count * 2.5)))
             if pair_count == 1:
-                axes = [axes]
+                axes = np.array([axes], dtype=object)
 
             with torch.no_grad():
                 for i in range(pair_count):
-                    anchor = selected_anchors[i]
+                    anchor = anchors[i]
                     hidden_state = anchor["hidden_state"].unsqueeze(0).to(self.device)
                     direction = anchor["direction"].unsqueeze(0).to(self.device)
                     info = anchor["info"].unsqueeze(0).to(self.device)
@@ -780,20 +976,26 @@ class CFMADM(pl.LightningModule):
                     axes[i][0].set_title(f"GT | {anchor['exp']} | t={anchor['timestep']} | GT_DI={anchor['gt_di']:.2f}")
                     axes[i][0].axis("off")
                     axes[i][1].imshow(sampled_vis.permute(1, 2, 0).numpy())
-                    axes[i][1].set_title(f"Inference | fixed_di={di_value:.2f}")
+                    axes[i][1].set_title(f"Inference | DI={di_value:.2f}")
                     axes[i][1].axis("off")
 
-            fig.suptitle(f"CFM Fixed-DI Inference | Epoch {epoch_num:05d}")
+            step_num = int(self.global_step)
+            fig.suptitle(f"CFM Fixed-DI Inference | Step {step_num:05d}")
             plt.tight_layout()
 
             save_dir = os.path.join(self.result_dir, "inference_samples")
             os.makedirs(save_dir, exist_ok=True)
-            fig_path = os.path.join(save_dir, f"fixed_di_epoch_{epoch_num:05d}.png")
+            fig_path = os.path.join(save_dir, f"fixed_di_step_{step_num:05d}.png")
             fig.savefig(fig_path, dpi=150, bbox_inches="tight")
             print(f"[CFM] Saved fixed-DI inference samples: {fig_path}")
             if wandb.run is not None:
-                wandb.log({f"CFM/FixedDI Epoch {epoch_num:05d}": wandb.Image(fig)})
+                # Unique key per step so each inference panel stays independent in W&B.
+                wandb.log(
+                    {f"CFM/FixedDI/step_{step_num:05d}": wandb.Image(fig)},
+                    step=step_num,
+                )
             plt.close(fig)
+            self._has_logged_initial_inference = True
 
         if self.add_DI_loss and len(self.validation_outputs["gt_DI"]) > 0:
             gt = torch.concatenate(self.validation_outputs["gt_DI"]).cpu().numpy()
@@ -812,25 +1014,41 @@ class CFMADM(pl.LightningModule):
         if self.lr_schedule != "warmup_cosine":
             return optimizer
 
-        def lr_lambda(epoch_idx):
-            if self.warmup_epochs > 0 and epoch_idx < self.warmup_epochs:
-                return float(epoch_idx + 1) / float(self.warmup_epochs)
-            remain = max(self.total_epochs - self.warmup_epochs, 1)
-            progress = min(max((epoch_idx - self.warmup_epochs) / remain, 0.0), 1.0)
+        def lr_lambda(step_idx):
+            if self.warmup_steps > 0 and step_idx < self.warmup_steps:
+                return float(step_idx + 1) / float(self.warmup_steps)
+            remain = max(self.total_steps - self.warmup_steps, 1)
+            progress = min(max((step_idx - self.warmup_steps) / remain, 0.0), 1.0)
             cosine = 0.5 * (1.0 + np.cos(np.pi * progress))
             return self.min_lr_ratio + (1.0 - self.min_lr_ratio) * cosine
 
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
-        return [optimizer], [scheduler]
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "step",
+                "frequency": 1,
+            },
+        }
 
     def on_before_optimizer_step(self, optimizer):
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+        # Log pre-clip L2 so the W&B y-axis shows actual magnitude (not capped at 1).
         grad_norm_sq = torch.zeros(1, device=self.device)
         for param in self.velocity_net.parameters():
             if param.grad is not None:
                 grad_norm_sq += torch.sum(param.grad.detach() ** 2)
-        grad_norm = torch.sqrt(grad_norm_sq).squeeze(0)
-        self.log("train/grad_norm", grad_norm, on_step=True, on_epoch=True, prog_bar=False, logger=True)
+        grad_norm_l2 = torch.sqrt(grad_norm_sq).squeeze(0)
+        self.log(
+            "train/grad_norm_L2",
+            grad_norm_l2,
+            on_step=True,
+            on_epoch=False,
+            prog_bar=False,
+            logger=True,
+        )
+        if self.grad_clip_max_norm > 0:
+            torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=self.grad_clip_max_norm)
 
 
 class Baseline(pl.LightningModule):
@@ -847,6 +1065,7 @@ class Baseline(pl.LightningModule):
         self.latent_conditioning = latent_conditioning
         self.direction_conditioning = kwargs.get("direction_conditioning", True)
         self.include_di_conditioning = kwargs.get("include_di_conditioning", False)
+        self.condition_mode = str(kwargs.get("condition_mode", "full")).lower()
         self.lr_schedule = kwargs.get("lr_schedule", "constant")
         self.warmup_epochs = kwargs.get("warmup_epochs", 5)
         self.min_lr_ratio = kwargs.get("min_lr_ratio", 0.1)
@@ -893,6 +1112,7 @@ class Baseline(pl.LightningModule):
             self.latent_conditioning,
             self.direction_conditioning,
             self.include_di_conditioning,
+            self.condition_mode,
         )
         
     
