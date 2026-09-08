@@ -1,7 +1,8 @@
-"""Preview train images with grayscale + CLAHE preprocessing (before/after)."""
+"""Preview train images with grayscale or color CLAHE preprocessing (before/after)."""
 import argparse
 import json
 import os
+import sys
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,29 +10,35 @@ import pandas as pd
 import torch
 from PIL import Image
 
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from src.utils import build_damage_image_transform_with_loss_mask
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Preview train images with CLAHE preprocessing.")
+    parser = argparse.ArgumentParser(description="Preview CLAHE preprocessing on train images.")
     parser.add_argument("--data_path", type=str, default="id_list_no_leak.json")
     parser.add_argument("--image_size", type=int, default=128)
-    parser.add_argument("--num_images", type=int, default=50)
-    parser.add_argument("--grid_cols", type=int, default=5)
+    parser.add_argument("--num_images", type=int, default=12)
+    parser.add_argument("--grid_cols", type=int, default=4)
     parser.add_argument(
         "--output_path",
         type=str,
-        default="results/DamagePatternGeneration/data_check/dataloader_clahe_preview.png",
+        default="results/DamagePatternGeneration/data_check/dataloader_color_clahe_preview.png",
     )
     parser.add_argument("--clahe_clip_limit", type=float, default=2.0)
     parser.add_argument("--clahe_tile_grid_size", type=str, default="8,8")
+    parser.add_argument("--use_grayscale_input", type=lambda x: str(x).lower() in {"1", "true", "yes"}, default=False)
     parser.add_argument("--seed", type=int, default=0)
     return parser.parse_args()
 
 
 def _to_vis(image_tensor):
     image = (image_tensor.detach().cpu() * 0.5 + 0.5).clamp(0.0, 1.0)
-    return image.permute(1, 2, 0).numpy()
+    arr = image.permute(1, 2, 0).numpy()
+    if arr.shape[-1] == 1:
+        arr = np.repeat(arr, 3, axis=-1)
+    return arr
 
 
 def main():
@@ -53,8 +60,7 @@ def main():
         output_scale=True,
         normalize_mean=(0.5, 0.5, 0.5),
         normalize_std=(0.5, 0.5, 0.5),
-        use_grayscale_input=True,
-        use_random_affine=False,
+        use_grayscale_input=args.use_grayscale_input,
     )
     transform_base = build_damage_image_transform_with_loss_mask(**common_kwargs, use_clahe=False)
     transform_clahe = build_damage_image_transform_with_loss_mask(
@@ -72,12 +78,17 @@ def main():
         image = Image.open(os.path.join(image_dir, filename))
         base = transform_base(image)["target_image"]
         clahe = transform_clahe(image)["target_image"]
+        assert base.shape[0] == 3, f"Expected 3-channel output, got {tuple(base.shape)}"
+        assert clahe.shape[0] == 3, f"Expected 3-channel CLAHE output, got {tuple(clahe.shape)}"
         pairs.append((_to_vis(base), _to_vis(clahe), filename, di_value))
 
     cols = int(args.grid_cols)
     rows = int(np.ceil(len(pairs) / cols))
-    fig, axes = plt.subplots(rows, cols * 2, figsize=(cols * 2.4, rows * 1.6))
+    fig, axes = plt.subplots(rows, cols * 2, figsize=(cols * 2.6, rows * 2.0))
     axes = np.array(axes).reshape(rows, cols * 2)
+
+    base_title = "Gray" if args.use_grayscale_input else "RGB"
+    clahe_title = "Gray+CLAHE" if args.use_grayscale_input else "RGB+CLAHE (Lab-L)"
 
     for i in range(rows * cols):
         r = i // cols
@@ -91,8 +102,8 @@ def main():
         axes[r][c0].imshow(base_img)
         axes[r][c1].imshow(clahe_img)
         if r == 0:
-            axes[r][c0].set_title("Gray", fontsize=8)
-            axes[r][c1].set_title("CLAHE", fontsize=8)
+            axes[r][c0].set_title(base_title, fontsize=9)
+            axes[r][c1].set_title(clahe_title, fontsize=9)
         axes[r][c0].text(
             0.02,
             0.98,
@@ -103,21 +114,27 @@ def main():
             va="top",
         )
 
+    mode_label = "Grayscale" if args.use_grayscale_input else "Color (Lab-L CLAHE)"
     os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
     fig.suptitle(
-        f"Train CLAHE Preview | clipLimit={args.clahe_clip_limit} | tileGridSize=({args.clahe_tile_grid_size})",
+        f"Train CLAHE Preview ({mode_label}) | clipLimit={args.clahe_clip_limit} | "
+        f"tileGridSize=({args.clahe_tile_grid_size})",
         fontsize=12,
     )
     plt.tight_layout()
     fig.savefig(args.output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
-    # Quick sanity: CLAHE should change pixel distribution for most samples.
     diffs = [float(np.mean(np.abs(a - b))) for a, b, *_ in pairs]
+    channel_std = [float(np.std(a - b)) for a, b, *_ in pairs]
     print(f"[preview] Saved: {args.output_path}")
     print(f"[preview] Samples: {len(pairs)}")
-    print(f"[preview] Mean |Gray-CLAHE| intensity delta: {np.mean(diffs):.4f}")
-    print(f"[preview] CLAHE clipLimit={args.clahe_clip_limit} tileGridSize={args.clahe_tile_grid_size}")
+    print(f"[preview] Mean |before-after| delta: {np.mean(diffs):.4f}")
+    print(f"[preview] Mean channel delta std: {np.mean(channel_std):.4f}")
+    print(
+        f"[preview] mode={'grayscale' if args.use_grayscale_input else 'color'} "
+        f"clipLimit={args.clahe_clip_limit} tileGridSize={args.clahe_tile_grid_size}"
+    )
 
 
 if __name__ == "__main__":

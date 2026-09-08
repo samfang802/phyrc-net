@@ -1,0 +1,58 @@
+# Generated model artifacts and experiment tracking
+results/**/*.ckpt
+results/**/*.pt
+results/**/*.pth
+results/**/*.onnx
+results/**/wandb/
+results/**/inference_samples/
+results/**/data_check/
+results/**/*.png
+results/**/*.jpg
+results/**/*.jpeg
+results/**/*.svg
+results/**/*.npz
+results/**/*.log
+cGANckpt/
+lightning_logs/
+log/
+
+# Runtime-only model files (keep small args.json files searchable)
+phase1_extractor/**/*.ckpt
+phase1_extractor/**/*.pt
+
+# Large datasets and derived images; source code only needs their paths
+Data/DamagePattern/images/
+Data/DamagePattern/mask/
+Data/DamagePattern/anylabel/
+Data/DamagePattern_inpaint*/
+mander/
+mp4/
+eval/
+
+# Python/editor caches
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Vendor demos and nested repository metadata
+third_party/PlotNeuralNet/.git/
+third_party/PlotNeuralNet/examples/
+third_party/PlotNeuralNet/pyexamples/
+
+# Large or historical analysis artifacts
+segment.ipynb
+analysis.ipynb
+ARCHITECTURE.md
+ARCHITECTURE_UPDATE_V2.md
+ARCHITECTURE_UPDATE_V3.md
+ARCHITECTURE_UPDATE_V4.md
+ARCHITECTURE_UPDATE_V5.md
+ARCHITECTURE_UPDATE_V6.md
+ARCHITECTURE_UPDATE_V7.md
+ARCHITECTURE_UPDATE_V8.md
+AR_noisy_zprev.md
+METHOD_ADMUNET_CFM.md
+DI_EVALUATOR_ARCHITECTURE.md

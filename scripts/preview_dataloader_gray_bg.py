@@ -68,12 +68,6 @@ def parse_args():
         default=True,
         help="Convert input image to grayscale and expand to 3 channels",
     )
-    parser.add_argument(
-        "--use_random_affine",
-        type=lambda x: str(x).lower() in {"1", "true", "yes", "y"},
-        default=True,
-        help="Enable RandomAffine (joint image + mask transform)",
-    )
     return parser.parse_args()
 
 
@@ -99,7 +93,6 @@ def main():
         normalize_mean=(0.5, 0.5, 0.5),
         normalize_std=(0.5, 0.5, 0.5),
         use_grayscale_input=bool(args.use_grayscale_input),
-        use_random_affine=bool(args.use_random_affine),
         aug_brightness=0.12,
         aug_contrast=0.12,
     )
@@ -115,8 +108,6 @@ def main():
         column_info=column_info,
         train_virtual_repeat=1,
         use_loss_mask=True,
-        use_object_loss_mask=True,
-        use_damage_mask_condition=False,
         condition_perturb=False,
         image_size=args.image_size,
     )
@@ -167,8 +158,7 @@ def main():
     print(f"[preview] Samples: {len(images)}")
     print(
         f"[preview] img_aug={bool(args.img_aug)} "
-        f"use_grayscale_input={bool(args.use_grayscale_input)} "
-        f"use_random_affine={bool(args.use_random_affine)}"
+        f"use_grayscale_input={bool(args.use_grayscale_input)}"
     )
     if bool(args.use_grayscale_input):
         channel_delta = np.abs(stacked[..., 0] - stacked[..., 1]).mean() + np.abs(stacked[..., 1] - stacked[..., 2]).mean()

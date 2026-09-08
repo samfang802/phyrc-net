@@ -35,6 +35,9 @@ AUG_ERASE_RATIO_MIN=0.3
 AUG_ERASE_RATIO_MAX=3.3
 EARLY_STOP_PATIENCE=50
 EARLY_STOP_MIN_DELTA=0.0
+USE_EARLY_STOPPING=True
+RESET_EARLY_STOP_PATIENCE=True
+RESET_EARLY_STOP_BEST_SCORE=False
 
 EXTRACTOR_PATH="./phase1_extractor"
 CKPT_PATH="./results/DamagePatternGeneration/CFMADM/2026-07-17_23-01-43/Opensees Based damage Patterns Generation/ry2oq2xs/checkpoints/best_val_loss_val/loss=0.0227.ckpt"
@@ -91,9 +94,14 @@ python3 -u train_mixed.py --lr 4e-4 --epoch 1800 --batch_size 32 --num_workers 1
         --aug_blur_kernel "${AUG_BLUR_KERNEL}" --aug_blur_sigma_min "${AUG_BLUR_SIGMA_MIN}" --aug_blur_sigma_max "${AUG_BLUR_SIGMA_MAX}" \
         --aug_erase_prob "${AUG_ERASE_PROB}" --aug_erase_scale_min "${AUG_ERASE_SCALE_MIN}" --aug_erase_scale_max "${AUG_ERASE_SCALE_MAX}" \
         --aug_erase_ratio_min "${AUG_ERASE_RATIO_MIN}" --aug_erase_ratio_max "${AUG_ERASE_RATIO_MAX}" \
+        --use_early_stopping "${USE_EARLY_STOPPING}" \
         --early_stop_patience "${EARLY_STOP_PATIENCE}" --early_stop_min_delta "${EARLY_STOP_MIN_DELTA}" \
-        --latent_conditioning True --direction_conditioning True --include_di_conditioning True --add_DI_loss False \
+        --reset_early_stop_patience "${RESET_EARLY_STOP_PATIENCE}" \
+        --reset_early_stop_best_score "${RESET_EARLY_STOP_BEST_SCORE}" \
+        --latent_conditioning True --direction_conditioning True --include_di_conditioning False --add_DI_loss False \
         --image_size 128 --cfm_model_channels 32 --cfm_num_res_blocks 1 --cfm_cond_dim 128 --cfm_dropout 0.1 \
+        --cfm_mid_attn_heads 4 \
+        --use_patch_diffusion True --patch_size_probs 0.5,0.3,0.2 \
         --cfm_solver heun --cfm_ode_steps 30 --lr_schedule warmup_cosine --warmup_epochs 180 --min_lr_ratio 0.1 \
         --val_every_n_epoch 10 --inference_every_n_epochs 50 --inference_num_images 4 --metrics_every_n_epochs 100 \
         --fixed_di_values 0.0,0.4,0.75,0.95
