@@ -32,7 +32,11 @@ def _save_augmented_grid_preview(dataset, result_dir, num_images=100, grid_size=
     indices = torch.randperm(total)[:sample_count].tolist()
     images = []
     for idx in indices:
-        image, *_ = dataset[idx]
+        sample = dataset[idx]
+        if isinstance(sample, dict):
+            image = sample.get("image_target", sample.get("image"))
+        else:
+            image, *_ = sample
         if torch.is_tensor(image):
             img = image.detach().cpu()
             if img.ndim == 3 and img.shape[0] in (1, 3):
@@ -83,6 +87,65 @@ class PeriodicPtCheckpoint(pl.Callback):
         print(f"[train_mixed] Saved periodic checkpoint: {save_path}", flush=True)
 
 
+class PeriodicStepCheckpoint(pl.Callback):
+    def __init__(self, every_n_steps=2000, start_step=10000):
+        super().__init__()
+        self.every_n_steps = max(1, int(every_n_steps))
+        self.start_step = max(0, int(start_step))
+
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        step = int(trainer.global_step)
+        if step < self.start_step or step % self.every_n_steps != 0:
+            return
+        save_path = os.path.join(pl_module.result_dir, f"checkpoint_step_{step:06d}.pt")
+        payload = {
+            "epoch": trainer.current_epoch,
+            "global_step": step,
+            "state_dict": pl_module.state_dict(),
+            "hyper_parameters": dict(getattr(pl_module, "hparams", {})),
+        }
+        torch.save(payload, save_path)
+        print(f"[train_mixed] Saved periodic step checkpoint: {save_path}", flush=True)
+
+
+class ResetEarlyStoppingPatience(pl.Callback):
+    """Reset EarlyStopping wait counter after Lightning restores callback state from ckpt."""
+
+    def __init__(self, reset_best_score=False):
+        super().__init__()
+        self.reset_best_score = bool(reset_best_score)
+        self._did_reset = False
+
+    def _reset(self, trainer):
+        if self._did_reset:
+            return
+        for callback in trainer.callbacks:
+            if not isinstance(callback, pl.callbacks.EarlyStopping):
+                continue
+            old_wait = int(getattr(callback, "wait_count", 0))
+            callback.wait_count = 0
+            msg = (
+                f"[train_mixed] Reset EarlyStopping patience: wait_count {old_wait} -> 0 "
+                f"(monitor={callback.monitor}, patience={callback.patience})"
+            )
+            if self.reset_best_score:
+                init = float("inf") if callback.mode == "min" else float("-inf")
+                best_score = getattr(callback, "best_score", init)
+                if torch.is_tensor(best_score):
+                    callback.best_score = torch.tensor(init, device=best_score.device, dtype=best_score.dtype)
+                else:
+                    callback.best_score = init
+                msg += f", best_score reset to {init}"
+            print(msg, flush=True)
+            self._did_reset = True
+
+    def on_fit_start(self, trainer, pl_module):
+        self._reset(trainer)
+
+    def on_train_start(self, trainer, pl_module):
+        # Safety: run again in case callback state is restored after on_fit_start.
+        self._reset(trainer)
+
 if __name__ == "__main__":
     current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     print("[train_mixed] Starting...", flush=True)
@@ -90,7 +153,9 @@ if __name__ == "__main__":
     print(
         f"[train_mixed] architecture={args.architecture} epoch={args.epoch} "
         f"batch_size={args.batch_size} num_workers={args.num_workers} "
-        f"use_sd3_vae_latent={getattr(args, 'use_sd3_vae_latent', False)}",
+        f"use_sd3_vae_latent={getattr(args, 'use_sd3_vae_latent', False)} "
+        f"use_mafp={getattr(args, 'use_mafp', False)} "
+        f"use_patch_diffusion={getattr(args, 'use_patch_diffusion', False)}",
         flush=True,
     )
     
@@ -100,7 +165,21 @@ if __name__ == "__main__":
     callback_list = [pl.callbacks.ModelCheckpoint(save_last=True, filename="last")]
     if args.checkpoint_every_n_epochs > 0:
         callback_list.insert(0, PeriodicPtCheckpoint(every_n_epochs=args.checkpoint_every_n_epochs))
-    if args.early_stop_patience > 0:
+    if args.checkpoint_every_n_steps > 0:
+        start_step = int(getattr(args, "checkpoint_start_step", 10000))
+        callback_list.insert(
+            0,
+            PeriodicStepCheckpoint(
+                every_n_steps=args.checkpoint_every_n_steps,
+                start_step=start_step,
+            ),
+        )
+        print(
+            f"[train_mixed] Step ckpt: every {args.checkpoint_every_n_steps} steps "
+            f"after step>={start_step}",
+            flush=True,
+        )
+    if args.use_early_stopping and args.early_stop_patience > 0:
         callback_list.append(
             pl.callbacks.EarlyStopping(
                 monitor="val/loss",
@@ -109,51 +188,27 @@ if __name__ == "__main__":
                 min_delta=args.early_stop_min_delta,
             )
         )
-    if args.architecture == "CFMADM":
-        # CFM metrics may be sparse (e.g. metrics_every_n_epochs=300), so always
-        # keep a stable val/loss monitor for checkpoint selection.
-        callback_list.append(
-            pl.callbacks.ModelCheckpoint(
-                monitor="val/loss",
-                mode="min",
-                save_top_k=1,
-                filename="best_val_loss_{val/loss:.4f}",
-            )
-        )
-        if args.metrics_every_n_epochs <= args.val_check_interval:
+        if args.resume.strip() and args.reset_early_stop_patience:
             callback_list.append(
-                pl.callbacks.ModelCheckpoint(
-                    monitor="val/fid",
-                    mode="min",
-                    save_top_k=1,
-                    filename="best_fid_{val/fid:.2f}",
-                )
+                ResetEarlyStoppingPatience(reset_best_score=args.reset_early_stop_best_score)
             )
-            callback_list.append(
-                pl.callbacks.ModelCheckpoint(
-                    monitor="val/ssim",
-                    mode="max",
-                    save_top_k=1,
-                    filename="best_ssim_{val/ssim:.4f}",
-                )
+            print(
+                "[train_mixed] Will reset EarlyStopping patience on resume "
+                f"(reset_best_score={args.reset_early_stop_best_score})",
+                flush=True,
             )
+    elif args.use_early_stopping and args.early_stop_patience <= 0:
+        print("[train_mixed] use_early_stopping=True but early_stop_patience<=0; EarlyStopping disabled.", flush=True)
     else:
-        callback_list.append(
-            pl.callbacks.ModelCheckpoint(
-                monitor="val/fid",
-                mode="min",
-                save_top_k=1,
-                filename="best_fid_{val/fid:.2f}",
-            )
+        print("[train_mixed] EarlyStopping disabled (use_early_stopping=False).", flush=True)
+    callback_list.append(
+        pl.callbacks.ModelCheckpoint(
+            monitor="val/loss",
+            mode="min",
+            save_top_k=1,
+            filename="best_val_loss_{val/loss:.4f}",
         )
-        callback_list.append(
-            pl.callbacks.ModelCheckpoint(
-                monitor="val/ssim",
-                mode="max",
-                save_top_k=1,
-                filename="best_ssim_{val/ssim:.4f}",
-            )
-        )
+    )
 
     # check arguments
     check_args(args, current_time)
@@ -174,10 +229,6 @@ if __name__ == "__main__":
         aug_contrast=args.aug_contrast,
         aug_saturation=args.aug_saturation,
         aug_hue=args.aug_hue,
-        aug_translate=args.aug_translate,
-        aug_scale_min=args.aug_scale_min,
-        aug_scale_max=args.aug_scale_max,
-        use_random_affine=args.use_random_affine,
         aug_hflip_prob=args.aug_hflip_prob,
         aug_blur_kernel=args.aug_blur_kernel,
         aug_blur_sigma_min=args.aug_blur_sigma_min,
@@ -204,9 +255,8 @@ if __name__ == "__main__":
         f"[train_mixed] img_aug={args.img_aug} use_grayscale_input={args.use_grayscale_input} "
         f"use_clahe={args.use_clahe} clahe_clip_limit={args.clahe_clip_limit} "
         f"clahe_tile_grid_size={args.clahe_tile_grid_size} "
-        f"use_random_affine={args.use_random_affine} "
         f"aug_brightness={args.aug_brightness} aug_contrast={args.aug_contrast} "
-        f"aug_translate={args.aug_translate} aug_erase_prob={args.aug_erase_prob}",
+        f"aug_erase_prob={args.aug_erase_prob}",
         flush=True,
     )
     
@@ -233,11 +283,21 @@ if __name__ == "__main__":
     dataset_kwargs = dict(vars(args))
     dataset_kwargs["use_loss_mask"] = True
     dataset_kwargs["use_damage_mask_condition"] = (
-        args.architecture == "CFMADM" and bool(args.use_damage_mask_condition)
+        args.architecture in ("CFMADM", "LaplacianBandCFM")
+        and bool(args.use_damage_mask_condition)
     )
+    if dataset_kwargs["use_damage_mask_condition"]:
+        if bool(dataset_kwargs.get("use_object_loss_mask", True)):
+            print(
+                "[train_mixed] use_damage_mask_condition=True -> forcing use_object_loss_mask=False "
+                "(mask is condition only; CFM loss is unmasked).",
+                flush=True,
+            )
+        dataset_kwargs["use_object_loss_mask"] = False
+        args.use_object_loss_mask = False
     print(
         f"[train_mixed] use_damage_mask_condition={dataset_kwargs['use_damage_mask_condition']} "
-        f"cfg_scale={getattr(args, 'cfg_scale', 1.0)}",
+        f"use_object_loss_mask={dataset_kwargs.get('use_object_loss_mask', True)}",
         flush=True,
     )
     print("[train_mixed] Building train dataset (hidden-state extraction may take several minutes)...", flush=True)
@@ -261,9 +321,10 @@ if __name__ == "__main__":
     print(f"[train_mixed] train={len(train_ds)} val={len(val_ds)}", flush=True)
     _save_augmented_grid_preview(train_ds, args.result_dir, num_images=100, grid_size=10)
 
+    train_batch_size = int(args.batch_size)
     train_dataloader = DataLoader(
         train_ds,
-        batch_size=args.batch_size,
+        batch_size=train_batch_size,
         shuffle=True,
         num_workers=num_workers,
         drop_last=True,

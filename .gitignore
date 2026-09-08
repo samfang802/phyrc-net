@@ -29,6 +29,10 @@ ENV/
 # Logs and runtime artifacts
 *.log
 logs/
+lightning_logs/
+wandb/
+*.e[0-9]*
+*.o[0-9]*
 
 # OS/editor files
 .DS_Store
@@ -40,6 +44,7 @@ Thumbs.db
 data/
 results/
 log/
+cGANckpt/
 Sample/
 temp/
 temp_all/
@@ -47,6 +52,11 @@ evaluation/
 notebook/
 generation/
 phase1_extractor/
+Data/DamagePattern/anylabel/
+Data/DamagePattern_inpaint*/
+Data/DamagePattern/anylabel_r_spall.csv
+Data/DamagePattern/r_spall.csv
+third_party/PlotNeuralNet/
 job.sh
 draw.ipynb
 best.ckpt

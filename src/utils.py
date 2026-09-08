@@ -100,16 +100,96 @@ def _clahe_numpy(gray_u8, clip_limit=2.0, tile_grid_size=(8, 8)):
     return np.clip(out + 0.5, 0, 255).astype(np.uint8)
 
 
-class ApplyCLAHE:
-    """Apply CLAHE on grayscale images to enhance micro-cracks.
+def _srgb_u8_to_linear_rgb(rgb_u8):
+    rgb = rgb_u8.astype(np.float64) / 255.0
+    linear = np.empty_like(rgb)
+    low = rgb <= 0.04045
+    linear[low] = rgb[low] / 12.92
+    linear[~low] = ((rgb[~low] + 0.055) / 1.055) ** 2.4
+    return linear
 
-    Expects a CHW image tensor. RGB inputs are converted to luminance first.
-    Uses OpenCV-compatible CLAHE parameters: clipLimit / tileGridSize.
+
+def _linear_rgb_to_srgb_u8(linear_rgb):
+    rgb = np.empty_like(linear_rgb)
+    low = linear_rgb <= 0.0031308
+    rgb[low] = linear_rgb[low] * 12.92
+    rgb[~low] = 1.055 * (linear_rgb[~low] ** (1.0 / 2.4)) - 0.055
+    return np.clip(rgb * 255.0 + 0.5, 0, 255).astype(np.uint8)
+
+
+def _rgb_u8_to_lab(rgb_u8):
+    """Convert RGB uint8 HWC to CIELAB (L in [0,100], a/b unbounded)."""
+    rgb_lin = _srgb_u8_to_linear_rgb(rgb_u8)
+    r, g, b = rgb_lin[..., 0], rgb_lin[..., 1], rgb_lin[..., 2]
+    x = 0.4124564 * r + 0.3575761 * g + 0.1804375 * b
+    y = 0.2126729 * r + 0.7151522 * g + 0.0721750 * b
+    z = 0.0193339 * r + 0.1191920 * g + 0.9503041 * b
+
+    xn, yn, zn = 0.95047, 1.0, 1.08883
+
+    def _f(t):
+        out = np.empty_like(t)
+        mask = t > 0.008856
+        out[mask] = np.cbrt(t[mask])
+        out[~mask] = 7.787 * t[~mask] + 16.0 / 116.0
+        return out
+
+    fx, fy, fz = _f(x / xn), _f(y / yn), _f(z / zn)
+    l = 116.0 * fy - 16.0
+    a = 500.0 * (fx - fy)
+    b = 200.0 * (fy - fz)
+    return l, a, b
+
+
+def _lab_to_rgb_u8(l, a, b):
+    """Convert CIELAB channels back to RGB uint8 HWC."""
+    fy = (l + 16.0) / 116.0
+    fx = fy + a / 500.0
+    fz = fy - b / 200.0
+
+    def _f_inv(t):
+        out = np.empty_like(t)
+        mask = t > 0.206893
+        out[mask] = t[mask] ** 3
+        out[~mask] = (t[~mask] - 16.0 / 116.0) / 7.787
+        return out
+
+    xn, yn, zn = 0.95047, 1.0, 1.08883
+    x = xn * _f_inv(fx)
+    y = yn * _f_inv(fy)
+    z = zn * _f_inv(fz)
+
+    r = 3.2404542 * x - 1.5371385 * y - 0.4985314 * z
+    g = -0.9692660 * x + 1.8760108 * y + 0.0415560 * z
+    b = 0.0556434 * x - 0.2040259 * y + 1.0572252 * z
+    rgb_lin = np.stack([r, g, b], axis=-1)
+    rgb_lin = np.clip(rgb_lin, 0.0, None)
+    return _linear_rgb_to_srgb_u8(rgb_lin)
+
+
+def _apply_clahe_on_lab_l_channel(rgb_u8, clip_limit=2.0, tile_grid_size=(8, 8)):
+    """Apply CLAHE to the L channel in Lab space while preserving chroma (a/b)."""
+    l, a, b = _rgb_u8_to_lab(rgb_u8)
+    l_u8 = np.clip(l / 100.0 * 255.0 + 0.5, 0, 255).astype(np.uint8)
+    l_enhanced = _clahe_numpy(l_u8, clip_limit=clip_limit, tile_grid_size=tile_grid_size)
+    l_new = l_enhanced.astype(np.float64) / 255.0 * 100.0
+    return _lab_to_rgb_u8(l_new, a, b)
+
+
+class ApplyCLAHE:
+    """Apply CLAHE to enhance micro-cracks.
+
+    Grayscale mode (``preserve_color=False``):
+        1-channel input, or RGB converted to luminance -> 1-channel output.
+
+    Color mode (``preserve_color=True``):
+        RGB input -> CLAHE on Lab L channel only -> 3-channel RGB output.
     """
 
-    def __init__(self, clip_limit=2.0, tile_grid_size=(8, 8)):
+    def __init__(self, clip_limit=2.0, tile_grid_size=(8, 8), preserve_color=False):
         self.clip_limit = float(clip_limit)
         self.tile_grid_size = _parse_clahe_tile_grid_size(tile_grid_size)
+        self.preserve_color = bool(preserve_color)
 
     def __call__(self, image):
         if not torch.is_tensor(image):
@@ -125,6 +205,24 @@ class ApplyCLAHE:
             img_u8 = (img * scale).clamp(0, 255).to(torch.uint8)
         else:
             img_u8 = img.to(torch.uint8)
+
+        if self.preserve_color:
+            if img_u8.shape[0] != 3:
+                raise ValueError(
+                    f"Color CLAHE expects 3-channel RGB input, got {img_u8.shape[0]} channels"
+                )
+            rgb_hwc = img_u8.permute(1, 2, 0).cpu().numpy()
+            enhanced = _apply_clahe_on_lab_l_channel(
+                rgb_hwc,
+                clip_limit=self.clip_limit,
+                tile_grid_size=self.tile_grid_size,
+            )
+            out = torch.from_numpy(enhanced).permute(2, 0, 1).to(device=image.device)
+            if was_float:
+                out = out.to(dtype=image.dtype) / 255.0
+            else:
+                out = out.to(dtype=image.dtype)
+            return out
 
         if img_u8.shape[0] == 3:
             r, g, b = img_u8[0].float(), img_u8[1].float(), img_u8[2].float()
@@ -159,10 +257,6 @@ def build_damage_image_transform(
     aug_contrast=0.12,
     aug_saturation=0.08,
     aug_hue=0.02,
-    aug_translate=0.02,
-    aug_scale_min=0.98,
-    aug_scale_max=1.02,
-    aug_affine=True,
     aug_blur_kernel=3,
     aug_blur_sigma_min=0.1,
     aug_blur_sigma_max=0.5,
@@ -180,9 +274,6 @@ def build_damage_image_transform(
 ):
     use_grayscale_input = bool(use_grayscale_input)
     use_clahe = bool(use_clahe)
-    # CLAHE is defined on grayscale luminance; force grayscale when enabled.
-    if use_clahe:
-        use_grayscale_input = True
 
     transforms = [
         v2.Resize((image_size, image_size)),
@@ -195,6 +286,7 @@ def build_damage_image_transform(
             ApplyCLAHE(
                 clip_limit=clahe_clip_limit,
                 tile_grid_size=clahe_tile_grid_size,
+                preserve_color=not use_grayscale_input,
             )
         )
 
@@ -211,19 +303,6 @@ def build_damage_image_transform(
                             contrast=aug_contrast,
                             saturation=jitter_saturation,
                             hue=jitter_hue,
-                        )
-                    ],
-                    p=aug_prob,
-                )
-            )
-        if aug_affine:
-            transforms.append(
-                v2.RandomApply(
-                    [
-                        v2.RandomAffine(
-                            degrees=0,
-                            translate=(aug_translate, aug_translate),
-                            scale=(aug_scale_min, aug_scale_max),
                         )
                     ],
                     p=aug_prob,
@@ -259,22 +338,13 @@ def build_damage_image_transform(
 
 
 class MaskedDamageImageTransform:
-    """Apply image augmentation and return a masked image with its valid-pixel mask.
-
-    ``loss_mask`` has shape ``(1, H, W)`` and uses 1 for valid pixels.
-    RandomAffine translation is applied jointly to image + all mask tensors.
-    """
+    """Apply image augmentation and return image with optional valid-pixel loss mask."""
 
     def __init__(
         self,
         image_transform,
         use_augmentation=False,
         horizontal_flip_prob=0.5,
-        aug_affine=False,
-        aug_prob=0.5,
-        aug_translate=0.10,
-        aug_scale_min=1.0,
-        aug_scale_max=1.0,
         aug_erase_prob=0.25,
         aug_erase_scale_min=0.01,
         aug_erase_scale_max=0.08,
@@ -287,11 +357,6 @@ class MaskedDamageImageTransform:
         self.image_transform = image_transform
         self.use_augmentation = use_augmentation
         self.horizontal_flip_prob = horizontal_flip_prob
-        self.aug_affine = bool(aug_affine)
-        self.aug_prob = float(aug_prob)
-        self.aug_translate = float(aug_translate)
-        self.aug_scale_min = float(aug_scale_min)
-        self.aug_scale_max = float(aug_scale_max)
         self.aug_erase_prob = float(aug_erase_prob)
         self.aug_erase_scale = (
             float(aug_erase_scale_min),
@@ -309,43 +374,6 @@ class MaskedDamageImageTransform:
         if self.normalize_mean is None or self.normalize_std is None:
             return target_image
         return TF.normalize(target_image, mean=list(self.normalize_mean), std=list(self.normalize_std))
-
-    def _maybe_apply_random_affine(self, target_image, *mask_tensors):
-        if not self.aug_affine or torch.rand(()) >= self.aug_prob:
-            return (target_image, *mask_tensors)
-
-        height, width = target_image.shape[-2], target_image.shape[-1]
-        max_dx = int(round(self.aug_translate * width))
-        max_dy = int(round(self.aug_translate * height))
-        # Asymmetrical translation:
-        # - X: symmetric [-max_dx, max_dx]
-        # - Y: only upward / zero [-max_dy, 0] (dy < 0 moves content up in TF.affine).
-        dx = int(torch.randint(-max_dx, max_dx + 1, (1,)).item()) if max_dx > 0 else 0
-        dy = int(torch.randint(-max_dy, 1, (1,)).item()) if max_dy > 0 else 0
-        translate = [dx, dy]
-        scale = float(torch.empty(1).uniform_(self.aug_scale_min, self.aug_scale_max).item())
-
-        affined_image = TF.affine(
-            target_image,
-            angle=0.0,
-            translate=translate,
-            scale=scale,
-            shear=[0.0, 0.0],
-            interpolation=InterpolationMode.BILINEAR,
-        )
-        affined_masks = []
-        for mask in mask_tensors:
-            affined_masks.append(
-                TF.affine(
-                    mask,
-                    angle=0.0,
-                    translate=translate,
-                    scale=scale,
-                    shear=[0.0, 0.0],
-                    interpolation=InterpolationMode.NEAREST,
-                )
-            )
-        return (affined_image, *affined_masks)
 
     @staticmethod
     def _sample_erase_region(height, width, scale, ratio):
@@ -413,7 +441,14 @@ class MaskedDamageImageTransform:
         ] = 0.0
         return target_image, loss_mask
 
-    def __call__(self, image, object_mask=None):
+    def __call__(self, image, object_mask=None, force_flip=None, apply_random_erasing=True):
+        """Transform one image.
+
+        Args:
+            force_flip: If True/False, force (or skip) H-flip; if None, sample randomly.
+                Used for AR prev/target pairs so both frames share the same flip.
+            apply_random_erasing: When False, skip random erasing (typical for prev frames).
+        """
         target_image = self.image_transform(image)
         if target_image.ndim != 3:
             raise ValueError(
@@ -426,40 +461,36 @@ class MaskedDamageImageTransform:
             dtype=target_image.dtype,
             device=target_image.device,
         )
-        if object_mask is not None:
-            object_mask = object_mask.to(device=target_image.device, dtype=target_image.dtype)
-            if object_mask.ndim == 2:
-                object_mask = object_mask.unsqueeze(0)
-            if object_mask.shape[-2:] != target_image.shape[-2:]:
-                object_mask = TF.resize(
-                    object_mask,
-                    size=[target_image.shape[-2], target_image.shape[-1]],
-                    interpolation=InterpolationMode.NEAREST,
-                )
         flipped = False
         if not self.use_augmentation:
             if object_mask is not None:
-                loss_mask = loss_mask * object_mask
+                loss_mask = loss_mask * object_mask.to(device=loss_mask.device, dtype=loss_mask.dtype)
             target_image = self._maybe_normalize(target_image)
-            return {"target_image": target_image, "loss_mask": loss_mask, "flipped": flipped}
+            return {
+                "target_image": target_image,
+                "loss_mask": loss_mask,
+                "object_mask": object_mask,
+                "flipped": flipped,
+            }
 
-        mask_stack = [loss_mask] + ([object_mask] if object_mask is not None else [])
-        target_image, *mask_stack = self._maybe_apply_random_affine(target_image, *mask_stack)
-        loss_mask = mask_stack[0]
-        if object_mask is not None:
-            object_mask = mask_stack[1]
-
-        if torch.rand(()) < self.horizontal_flip_prob:
+        do_flip = bool(force_flip) if force_flip is not None else bool(torch.rand(()) < self.horizontal_flip_prob)
+        if do_flip:
             target_image = torch.flip(target_image, dims=(-1,))
             loss_mask = torch.flip(loss_mask, dims=(-1,))
             if object_mask is not None:
                 object_mask = torch.flip(object_mask, dims=(-1,))
             flipped = True
-        target_image, loss_mask = self._maybe_apply_random_erasing(target_image, loss_mask)
+        if apply_random_erasing:
+            target_image, loss_mask = self._maybe_apply_random_erasing(target_image, loss_mask)
         if object_mask is not None:
-            loss_mask = loss_mask * object_mask
+            loss_mask = loss_mask * object_mask.to(device=loss_mask.device, dtype=loss_mask.dtype)
         target_image = self._maybe_normalize(target_image)
-        return {"target_image": target_image, "loss_mask": loss_mask, "flipped": flipped}
+        return {
+            "target_image": target_image,
+            "loss_mask": loss_mask,
+            "object_mask": object_mask,
+            "flipped": flipped,
+        }
 
 
 def build_damage_image_transform_with_loss_mask(
@@ -472,19 +503,10 @@ def build_damage_image_transform_with_loss_mask(
 ):
     """Build an on-the-fly image transform that also emits a binary loss mask."""
     hflip_prob = float(augmentation_kwargs.pop("aug_hflip_prob", 0.5))
-    use_random_affine = augmentation_kwargs.pop("use_random_affine", None)
-    if use_random_affine is None:
-        use_random_affine = augmentation_kwargs.pop("aug_affine", True)
-    aug_affine = bool(use_random_affine)
     use_grayscale_input = bool(augmentation_kwargs.pop("use_grayscale_input", True))
     use_clahe = bool(augmentation_kwargs.pop("use_clahe", False))
     clahe_clip_limit = float(augmentation_kwargs.pop("clahe_clip_limit", 2.0))
     clahe_tile_grid_size = augmentation_kwargs.pop("clahe_tile_grid_size", (8, 8))
-    aug_prob = float(augmentation_kwargs.pop("aug_prob", 0.5))
-    aug_translate = float(augmentation_kwargs.pop("aug_translate", 0.10))
-    aug_scale_min = float(augmentation_kwargs.pop("aug_scale_min", 1.0))
-    aug_scale_max = float(augmentation_kwargs.pop("aug_scale_max", 1.0))
-    # RandomAffine is handled jointly with loss/object masks in MaskedDamageImageTransform.
     image_transform = build_damage_image_transform(
         image_size=image_size,
         use_augmentation=use_augmentation,
@@ -492,7 +514,6 @@ def build_damage_image_transform_with_loss_mask(
         normalize_mean=None,
         normalize_std=None,
         include_random_erasing=False,
-        aug_affine=False,
         use_grayscale_input=use_grayscale_input,
         use_clahe=use_clahe,
         clahe_clip_limit=clahe_clip_limit,
@@ -503,11 +524,6 @@ def build_damage_image_transform_with_loss_mask(
         image_transform=image_transform,
         use_augmentation=use_augmentation,
         horizontal_flip_prob=hflip_prob,
-        aug_affine=aug_affine,
-        aug_prob=aug_prob,
-        aug_translate=aug_translate,
-        aug_scale_min=aug_scale_min,
-        aug_scale_max=aug_scale_max,
         aug_erase_prob=augmentation_kwargs.get("aug_erase_prob", 0.25),
         aug_erase_scale_min=augmentation_kwargs.get("aug_erase_scale_min", 0.01),
         aug_erase_scale_max=augmentation_kwargs.get("aug_erase_scale_max", 0.08),
@@ -515,7 +531,7 @@ def build_damage_image_transform_with_loss_mask(
         aug_erase_ratio_max=augmentation_kwargs.get("aug_erase_ratio_max", 3.3),
         normalize_mean=normalize_mean,
         normalize_std=normalize_std,
-        grayscale_expanded_rgb=use_grayscale_input or use_clahe,
+        grayscale_expanded_rgb=use_grayscale_input,
     )
 
 
