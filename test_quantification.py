@@ -55,7 +55,7 @@ if __name__ == "__main__":
         v2.Normalize(mean = [ -0.485, -0.456, -0.406 ], std = [ 1., 1., 1. ]),
     ])
     
-    model = importlib.import_module(f"src.model.DamageQuantification").__dict__["DamageQuantification"](**vars(args))
+    model = getattr(importlib.import_module(f"src.model.DamageQuantification"), "DamageQuantification")(**vars(args))
     print(model)
     if "vit" in args.backbone:
         attn_list = []

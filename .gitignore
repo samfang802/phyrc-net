@@ -41,7 +41,9 @@ Thumbs.db
 .idea/
 
 # Project-specific generated outputs
+# Linux is case-sensitive: `data/` does not ignore `Data/`.
 data/
+Data/
 results/
 log/
 cGANckpt/
@@ -52,10 +54,6 @@ evaluation/
 notebook/
 generation/
 phase1_extractor/
-Data/DamagePattern/anylabel/
-Data/DamagePattern_inpaint*/
-Data/DamagePattern/anylabel_r_spall.csv
-Data/DamagePattern/r_spall.csv
 third_party/PlotNeuralNet/
 job.sh
 draw.ipynb

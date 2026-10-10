@@ -55,7 +55,7 @@ if __name__ == "__main__":
     
     args.specified = ["CTR1"]
     
-    model = importlib.import_module(f"src.model.HystereticPrediction").__dict__[args.architecture](**vars(args))
+    model = getattr(importlib.import_module(f"src.model.HystereticPrediction"), args.architecture)(**vars(args))
     test_ds = HystereticDataset(root="./Data/Hysteresis", mode=mode, **vars(args))
     test_dataloader = DataLoader(test_ds, batch_size=1, shuffle=False, num_workers=os.cpu_count(), collate_fn=test_ds.collate_fn)
     

@@ -1,28 +1,24 @@
-"""Damage-pattern image generation models.
+"""Damage-pattern generators.
 
-This module is a thin compatibility facade. Implementation lives in ``src.model.cfm``.
+Attribute access loads only the requested class, so the default CFMADM
+path does not import Laplacian or other experiments.
 """
 
-from src.model.cfm import (
-    CFMADM,
-    LaplacianBandCFM,
-    build_generation_condition,
-    build_physics_condition,
-    build_scalar_condition,
-    parse_fixed_di_values,
-    parse_patch_size_probs,
-)
 
-# Private aliases kept for any in-repo callers that used the old names.
-_parse_fixed_di_values = parse_fixed_di_values
-_parse_patch_size_probs = parse_patch_size_probs
-
-__all__ = [
-    "CFMADM",
-    "LaplacianBandCFM",
-    "build_generation_condition",
-    "build_scalar_condition",
-    "build_physics_condition",
-    "parse_fixed_di_values",
-    "parse_patch_size_probs",
-]
+def __getattr__(name):
+    if name == "CFMADM":
+        from src.model.cfm.module import CFMADM
+        return CFMADM
+    if name == "LaplacianBandCFM":
+        from src.model.exp.laplacian_module import LaplacianBandCFM
+        return LaplacianBandCFM
+    if name in {
+        "build_generation_condition",
+        "build_physics_condition",
+        "build_scalar_condition",
+        "parse_fixed_di_values",
+        "parse_patch_size_probs",
+    }:
+        from src.model import cfm as cfm_pkg
+        return getattr(cfm_pkg, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -602,9 +602,7 @@ def main():
 
     extractor_path = args.extractor_path
     extractor_args = _load_args_from_result_dir(extractor_path)
-    extractor = importlib.import_module("src.model.HystereticPrediction").__dict__[
-        extractor_args.architecture
-    ](**vars(extractor_args))
+    extractor = getattr(importlib.import_module("src.model.HystereticPrediction"), extractor_args.architecture)(**vars(extractor_args))
     extractor = extractor.to(device)
     extractor_ckpt = _resolve_required_match(
         os.path.join(extractor_path, "**/best.ckpt"), "extractor checkpoint"
@@ -683,7 +681,7 @@ def main():
         val_dl = metrics_dl
         print(f"[test_cfm] {metrics_split} metrics samples={len(metrics_ds)}", flush=True)
 
-    model = importlib.import_module("src.model.ImageGeneration").__dict__[args.architecture](
+    model = getattr(importlib.import_module("src.model.ImageGeneration"), args.architecture)(
         regressor=None,
         **vars(args),
     )
@@ -755,9 +753,7 @@ def main():
         stage1_args.result_dir = stage1_dir
         stage1_args.use_cascade_sr = False
         stage1_args.cascade_stage1_checkpoint = ""
-        stage1 = importlib.import_module("src.model.ImageGeneration").__dict__[
-            stage1_args.architecture
-        ](regressor=None, **vars(stage1_args))
+        stage1 = getattr(importlib.import_module("src.model.ImageGeneration"), stage1_args.architecture)(regressor=None, **vars(stage1_args))
         _load_periodic_checkpoint(stage1, stage1_ckpt, device)
         stage1.to(device)
         stage1.eval()

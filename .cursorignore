@@ -27,7 +27,7 @@ Data/DamagePattern/anylabel/
 Data/DamagePattern_inpaint*/
 mander/
 mp4/
-eval/
+/eval/
 
 # Python/editor caches
 **/__pycache__/
@@ -56,3 +56,13 @@ ARCHITECTURE_UPDATE_V8.md
 AR_noisy_zprev.md
 METHOD_ADMUNET_CFM.md
 DI_EVALUATOR_ARCHITECTURE.md
+
+# Virtualenv and whole result trees (metrics included)
+.venv/
+venv/
+env/
+results/
+
+# PBS stdout / stderr
+*.o[0-9]*
+*.e[0-9]*

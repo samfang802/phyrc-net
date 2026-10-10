@@ -6,13 +6,8 @@
 #PBS -N CFM_pX0g
 
 cd "${PBS_O_WORKDIR:-$HOME/intership-project}"
-
-set +u
-source ~/.bashrc
-set -u
-conda activate internship
-
-module load cuda-12.4
+source job/DamagePatternGeneration/common.sh
+adm_env
 
 USE_NICE=False
 NICE=10

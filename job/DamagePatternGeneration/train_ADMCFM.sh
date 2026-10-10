@@ -1,34 +1,16 @@
 #!/bin/bash
-#PBS -l select=1:ncpus=2:gpu_id=7
+#PBS -l select=1:ncpus=2:mem=15gb:gpu_id=2
 #PBS -l place=shared
-#PBS -o log/train_selfcondnoDI.out
-#PBS -e log/train_selfcondnoDI.err
-#PBS -N CFM_scndi
-#
-# V9 / selfcondnoDI: pixel-space ADMUNetCFM + split gated AdaGN + zero DI
-# + classic self-conditioning + VSS L3/U3 + Patch Diffusion.
-# Matches results/DamagePatternGeneration/CFMADM/selfcondnoDI/args.json
+#PBS -o log/train_g_prob.out
+#PBS -e log/train_g_prob.err
+#PBS -N CFM_G
+
+# Same Linear(1024→128) split AdaGN, plus train-only 10% g=0 CFG dropout.
+# Does not drop patch XY. Resume-compatible with no-drop Linear ckpt (same arch).
 
 cd "${PBS_O_WORKDIR:-$HOME/intership-project}"
-
-set +u
-source ~/.bashrc
-set -u
-conda activate internship
-
-module load cuda-12.4
-
-# Process priority toggle.
-# - USE_NICE=False  -> original behavior (default OS priority, no nice wrapper)
-# - USE_NICE=True   -> run training with nice -n ${NICE}
-# Override at submit: qsub -v USE_NICE=False ...  or  qsub -v NICE=15 ...
-USE_NICE=False
-NICE=10
-if [[ "${USE_NICE}" == "True" || "${USE_NICE}" == "true" || "${USE_NICE}" == "1" ]]; then
-    NICE_CMD=(nice -n "${NICE}")
-else
-    NICE_CMD=()
-fi
+source job/DamagePatternGeneration/common.sh
+adm_env
 
 # Centralized augmentation config (single source in this script).
 AUG_PROB=0.5
@@ -54,14 +36,61 @@ AUG_ERASE_SCALE_MAX=0.15
 AUG_ERASE_RATIO_MIN=0.5
 AUG_ERASE_RATIO_MAX=2.5
 
-NUM_WORKERS=2
+NUM_WORKERS="${NUM_WORKERS:-2}"
+RUN_TAG="${RUN_TAG:-}"
 COND_PERTURB_DIST=uniform
 COND_PERTURB_MIN=0.01
 COND_PERTURB_MAX=0.03
 
-# Split gated AdaGN: scalar = (zeroed DI) + direction; GRU g fused via learnable alpha.
+# Split gated AdaGN: scalar = direction only (DI channel dropped); GRU g fused via alpha.
 CONDITION_MODE=split
 ZERO_DI_CONDITION=True
+CFG_G_DROP_PROB=0.0
+USE_SPALL_GROWTH_MASK="${USE_SPALL_GROWTH_MASK:-True}"
+# G from scratch. M is the frozen 2000-step extent head.
+# SPALL_SOFT_PAINT=True: feathered paint weight, same path in train and ODE.
+# SPALL_COND_PROB=True is the full-sigmoid ablation and cannot be combined with it.
+# Mask-only retrains stop at 2000 steps.
+SPALL_MASK_ONLY="${SPALL_MASK_ONLY:-False}"
+FREEZE_SPALL_MASK=True
+SPALL_COND_PROB=False
+SPALL_SOFT_PAINT=True
+SPALL_LOCK_HEALTHY="${SPALL_LOCK_HEALTHY:-True}"
+SPALL_HEALTHY_MARGIN="${SPALL_HEALTHY_MARGIN:-0.10}"
+SPALL_CTX_NOISE_MAX="${SPALL_CTX_NOISE_MAX:-0.15}"
+SPALL_MASK_CKPT="results/DamagePatternGeneration/CFMADM/2026-10-01_12-04-28/Opensees Based damage Patterns Generation/ixmlkm6l/checkpoints/last.ckpt"
+VELOCITY_INIT="${VELOCITY_INIT:-}"
+# Paired bridge: t=0 is the previous photo, t=1 is this photo. No M.
+USE_PAIRED_BRIDGE="${USE_PAIRED_BRIDGE:-False}"
+PAIRED_BRIDGE_NOISE_MAX="${PAIRED_BRIDGE_NOISE_MAX:-0.15}"
+if [[ "${USE_PAIRED_BRIDGE}" == "True" || "${USE_PAIRED_BRIDGE}" == "true" || "${USE_PAIRED_BRIDGE}" == "1" ]]; then
+    USE_SPALL_GROWTH_MASK=False
+    FREEZE_SPALL_MASK=False
+    SPALL_MASK_CKPT=""
+    SPALL_SOFT_PAINT=False
+    if [[ -z "${VELOCITY_INIT}" ]]; then
+        VELOCITY_INIT="results/DamagePatternGeneration/CFMADM/1024-dadaGNsplit/chjqbp9m_last.ckpt"
+    fi
+fi
+if [[ "${USE_SPALL_GROWTH_MASK}" != "True" && "${USE_SPALL_GROWTH_MASK}" != "true" && "${USE_SPALL_GROWTH_MASK}" != "1" ]]; then
+    FREEZE_SPALL_MASK=False
+    SPALL_MASK_CKPT=""
+fi
+SPALL_MASK_GRID=16
+SPALL_SHIFT_PX=4
+SPALL_MASK_THRESHOLD=0.5
+SPALL_DARK_LEVEL=0.0
+SPALL_BG_QUANTILE=0.70
+SPALL_BG_TARGET=0.30
+SPALL_BORDER_GAP=0.55
+SPALL_SEED_MARGIN=0.2
+SPALL_DILATE_K=1
+SPALL_CLOSE_K=3
+SPALL_TV_WEIGHT=0.0
+SPALL_NEW_CELL_WEIGHT=8
+SPALL_FEATHER_PX=4
+SPALL_POOL_NOISE_STD=0.05
+SPALL_LOSS_WEIGHT=1.0
 GATED_FUSION_ALPHA_DIM=scalar
 USE_PHYSICS_CROSS_ATTN=False
 CFM_PHYSICS_NUM_TOKENS=16
@@ -69,7 +98,7 @@ CFM_PHYSICS_TOKEN_DIM=128
 
 # Architecture bool: extra in_conv self-cond channels + train Bernoulli + ODE z1-hat carry.
 # False → no self-cond channels (incompatible with selfcondnoDI checkpoints).
-SELF_CONDITION=True
+SELF_CONDITION=False
 SELF_COND_TRAIN_PROB=0.5
 SELF_COND_WARMUP_START=2000
 SELF_COND_WARMUP_END=4000
@@ -80,14 +109,31 @@ USE_VSS_L3_U3=True
 USE_VSS_L2=False
 USE_VSS_U2=False
 USE_U1_EXTRA_RESBLOCK=False
-USE_PATCH_DIFFUSION=True
+USE_PATCH_DIFFUSION="${USE_PATCH_DIFFUSION:-True}"
+USE_PATCH_PROB_SCHEDULE=False
+PATCH_SCHEDULE_MODE=pixel_mass
+PATCH_PIXEL_MASS_START=0.55
+PATCH_PIXEL_MASS_END=0.64
+PATCH_QUARTER_PROB_START=0.15
+PATCH_QUARTER_PROB_END=0.10
+USE_PATCH_T_SCHEDULE=False
+PATCH_T_CROP_MIN=0.5
+PATCH_T_HALF_BOOST=0.20
 PATCH_SIZE_PROBS=0.5,0.3,0.2
+PHYSICS_BOTTLENECK_DIM=0
+G_TRAJ_MIX="${G_TRAJ_MIX:-False}"
+G_TRAJ_MIX_DELTA="${G_TRAJ_MIX_DELTA:-2}"
+G_TRAJ_MIX_MAX_LAMBDA="${G_TRAJ_MIX_MAX_LAMBDA:-0.5}"
+G_PCA_DIM=0
 
-IMAGE_SIZE=128
+IMAGE_SIZE="${IMAGE_SIZE:-128}"
 BATCH_SIZE=128
 CFM_MODEL_CHANNELS=32
 CFM_COND_DIM=128
 MAX_STEPS=15000
+if [[ "${SPALL_MASK_ONLY}" == "True" || "${SPALL_MASK_ONLY}" == "true" || "${SPALL_MASK_ONLY}" == "1" ]]; then
+    MAX_STEPS=2000
+fi
 WARMUP_STEPS=1000
 VAL_CHECK_INTERVAL=5
 
@@ -102,7 +148,7 @@ USE_EARLY_STOPPING=False
 RESET_EARLY_STOP_PATIENCE=True
 RESET_EARLY_STOP_BEST_SCORE=False
 CHECKPOINT_EVERY_N_STEPS=2000
-CHECKPOINT_START_STEP=10000
+CHECKPOINT_START_STEP=2000
 
 EXTRACTOR_PATH="./phase1_extractor"
 if [[ ! -f "${EXTRACTOR_PATH}/best.ckpt" || ! -f "${EXTRACTOR_PATH}/args.json" ]]; then
@@ -111,6 +157,7 @@ if [[ ! -f "${EXTRACTOR_PATH}/best.ckpt" || ! -f "${EXTRACTOR_PATH}/args.json" ]
     exit 1
 fi
 
+# Fresh run: M now predicts accumulated extent, so the old incremental head is the wrong function.
 RESUME_CKPT=""
 if [[ -n "${RESUME_CKPT}" ]]; then
     if [[ ! -f "${RESUME_CKPT}" ]]; then
@@ -130,13 +177,16 @@ else
     echo "[train_ADMCFM] USE_NICE=False (default priority, no nice)"
 fi
 echo "[train_ADMCFM] CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
-echo "[train_ADMCFM] V9 selfcondnoDI: ADM U-Net + split gated AdaGN + zero DI"
-echo "[train_ADMCFM] CONDITION_MODE=${CONDITION_MODE} ZERO_DI_CONDITION=${ZERO_DI_CONDITION} DATA_PATH=${DATA_PATH}"
+echo "[train_ADMCFM] ADM U-Net + split gated AdaGN + zero DI + no self-cond + static patch + Linear g"
+echo "[train_ADMCFM] CONDITION_MODE=${CONDITION_MODE} ZERO_DI_CONDITION=${ZERO_DI_CONDITION} CFG_G_DROP_PROB=${CFG_G_DROP_PROB} DATA_PATH=${DATA_PATH}"
 echo "[train_ADMCFM] gated_fusion_alpha_dim=${GATED_FUSION_ALPHA_DIM} USE_PHYSICS_CROSS_ATTN=${USE_PHYSICS_CROSS_ATTN}"
 echo "[train_ADMCFM] SELF_CONDITION=${SELF_CONDITION} p=${SELF_COND_TRAIN_PROB} warmup=[${SELF_COND_WARMUP_START},${SELF_COND_WARMUP_END}]"
 echo "[train_ADMCFM] USE_WAVELET_UNET=${USE_WAVELET_UNET} USE_VSS_L3_U3=${USE_VSS_L3_U3} USE_PATCH_DIFFUSION=${USE_PATCH_DIFFUSION}"
+echo "[train_ADMCFM] PATCH_SCHED=${USE_PATCH_PROB_SCHEDULE} PATCH_SIZE_PROBS=${PATCH_SIZE_PROBS} PATCH_T=${USE_PATCH_T_SCHEDULE}"
+echo "[train_ADMCFM] PHYSICS_BOTTLENECK_DIM=${PHYSICS_BOTTLENECK_DIM} G_PCA_DIM=${G_PCA_DIM} G_TRAJ_MIX=${G_TRAJ_MIX}"
 echo "[train_ADMCFM] IMAGE_SIZE=${IMAGE_SIZE} BATCH_SIZE=${BATCH_SIZE} CFM_MODEL_CHANNELS=${CFM_MODEL_CHANNELS} CFM_COND_DIM=${CFM_COND_DIM}"
-echo "[train_ADMCFM] MAX_STEPS=${MAX_STEPS} WARMUP_STEPS=${WARMUP_STEPS} VAL_CHECK_INTERVAL=${VAL_CHECK_INTERVAL}"
+echo "[train_ADMCFM] MAX_STEPS=${MAX_STEPS} WARMUP_STEPS=${WARMUP_STEPS} VAL_CHECK_INTERVAL=${VAL_CHECK_INTERVAL} NUM_WORKERS=${NUM_WORKERS}"
+echo "[train_ADMCFM] RUN_TAG=${RUN_TAG:-<none>} NUM_WORKERS=${NUM_WORKERS} PAIRED_BRIDGE=${USE_PAIRED_BRIDGE} BRIDGE_NOISE_MAX=${PAIRED_BRIDGE_NOISE_MAX} SPALL_COND_PROB=${SPALL_COND_PROB} SPALL_SOFT_PAINT=${SPALL_SOFT_PAINT} LOCK_HEALTHY=${SPALL_LOCK_HEALTHY} HEALTHY_MARGIN=${SPALL_HEALTHY_MARGIN} CTX_NOISE_MAX=${SPALL_CTX_NOISE_MAX} SPALL_MASK_ONLY=${SPALL_MASK_ONLY} FREEZE_SPALL_MASK=${FREEZE_SPALL_MASK} VELOCITY_INIT=${VELOCITY_INIT:-<empty>}"
 echo "[train_ADMCFM] val_anchor=${INFERENCE_VAL_ANCHOR_EXP} train_anchor=${INFERENCE_TRAIN_ANCHOR_EXP}"
 echo "[train_ADMCFM] FIXED_DI_VALUES=${FIXED_DI_VALUES}"
 python3 - <<'PY'
@@ -169,7 +219,7 @@ else
     exit 1
 fi
 
-"${NICE_CMD[@]}" python3 -u train_mixed.py --lr 1e-4 --epoch 3000 --batch_size "${BATCH_SIZE}" --num_workers "${NUM_WORKERS}" --train_virtual_repeat 100 --max_steps "${MAX_STEPS}" --warmup_steps "${WARMUP_STEPS}" --val_check_interval "${VAL_CHECK_INTERVAL}" --architecture CFMADM --loss_type CFMADM --data_path "${DATA_PATH}" \
+"${NICE_CMD[@]}" python3 -u train_mixed.py --lr 1e-4 --epoch 3000 --batch_size "${BATCH_SIZE}" --num_workers "${NUM_WORKERS}" --run_tag "${RUN_TAG}" --train_virtual_repeat 100 --max_steps "${MAX_STEPS}" --warmup_steps "${WARMUP_STEPS}" --val_check_interval "${VAL_CHECK_INTERVAL}" --architecture CFMADM --loss_type CFMADM --data_path "${DATA_PATH}" \
         --extractor_path "${EXTRACTOR_PATH}" --use_wandb \
         "${RESUME_ARGS[@]}" \
         --img_aug \
@@ -186,6 +236,34 @@ fi
         --condition_perturb_min "${COND_PERTURB_MIN}" --condition_perturb_max "${COND_PERTURB_MAX}" \
         --condition_mode "${CONDITION_MODE}" \
         --zero_di_condition "${ZERO_DI_CONDITION}" \
+        --cfg_g_drop_prob "${CFG_G_DROP_PROB}" \
+        --use_paired_bridge "${USE_PAIRED_BRIDGE}" \
+        --paired_bridge_noise_max "${PAIRED_BRIDGE_NOISE_MAX}" \
+        --use_spall_growth_mask "${USE_SPALL_GROWTH_MASK}" \
+        --spall_mask_grid "${SPALL_MASK_GRID}" \
+        --spall_shift_px "${SPALL_SHIFT_PX}" \
+        --spall_mask_threshold "${SPALL_MASK_THRESHOLD}" \
+        --spall_dark_level "${SPALL_DARK_LEVEL}" \
+        --spall_bg_quantile "${SPALL_BG_QUANTILE}" \
+        --spall_bg_target "${SPALL_BG_TARGET}" \
+        --spall_border_gap "${SPALL_BORDER_GAP}" \
+        --spall_seed_margin "${SPALL_SEED_MARGIN}" \
+        --spall_dilate_k "${SPALL_DILATE_K}" \
+        --spall_close_k "${SPALL_CLOSE_K}" \
+        --spall_tv_weight "${SPALL_TV_WEIGHT}" \
+        --spall_new_cell_weight "${SPALL_NEW_CELL_WEIGHT}" \
+        --spall_feather_px "${SPALL_FEATHER_PX}" \
+        --spall_pool_noise_std "${SPALL_POOL_NOISE_STD}" \
+        --spall_loss_weight "${SPALL_LOSS_WEIGHT}" \
+        --spall_mask_only "${SPALL_MASK_ONLY}" \
+        --freeze_spall_mask "${FREEZE_SPALL_MASK}" \
+        --spall_cond_prob "${SPALL_COND_PROB}" \
+        --spall_soft_paint "${SPALL_SOFT_PAINT}" \
+        --spall_lock_healthy "${SPALL_LOCK_HEALTHY}" \
+        --spall_healthy_margin "${SPALL_HEALTHY_MARGIN}" \
+        --spall_ctx_noise_max "${SPALL_CTX_NOISE_MAX}" \
+        --spall_mask_ckpt "${SPALL_MASK_CKPT}" \
+        --velocity_init "${VELOCITY_INIT}" \
         --gated_fusion_alpha_dim "${GATED_FUSION_ALPHA_DIM}" \
         --use_physics_cross_attn "${USE_PHYSICS_CROSS_ATTN}" \
         --cfm_physics_num_tokens "${CFM_PHYSICS_NUM_TOKENS}" \
@@ -199,7 +277,9 @@ fi
         --use_vss_l3_u3 "${USE_VSS_L3_U3}" \
         --use_vss_l2 "${USE_VSS_L2}" \
         --use_vss_u2 "${USE_VSS_U2}" \
-        --cfm_physics_adagn_dim 128 --physics_dim 1024 \
+        --cfm_physics_adagn_dim 128 --physics_dim 1024 --physics_bottleneck_dim "${PHYSICS_BOTTLENECK_DIM}" \
+        --g_traj_mix "${G_TRAJ_MIX}" --g_traj_mix_delta "${G_TRAJ_MIX_DELTA}" \
+        --g_traj_mix_max_lambda "${G_TRAJ_MIX_MAX_LAMBDA}" --g_pca_dim "${G_PCA_DIM}" \
         --use_early_stopping "${USE_EARLY_STOPPING}" \
         --early_stop_patience "${EARLY_STOP_PATIENCE}" --early_stop_min_delta "${EARLY_STOP_MIN_DELTA}" \
         --reset_early_stop_patience "${RESET_EARLY_STOP_PATIENCE}" \
@@ -210,11 +290,16 @@ fi
         --use_damage_mask_condition True --use_object_loss_mask False \
         --image_size "${IMAGE_SIZE}" --cfm_model_channels "${CFM_MODEL_CHANNELS}" --cfm_num_res_blocks 1 --cfm_cond_dim "${CFM_COND_DIM}" --cfm_dropout 0.1 \
         --cfm_mid_attn_heads 4 \
-        --use_patch_diffusion "${USE_PATCH_DIFFUSION}" --patch_size_probs "${PATCH_SIZE_PROBS}" \
+        --use_patch_diffusion "${USE_PATCH_DIFFUSION}" --use_patch_prob_schedule "${USE_PATCH_PROB_SCHEDULE}" \
+        --patch_schedule_mode "${PATCH_SCHEDULE_MODE}" --patch_size_probs "${PATCH_SIZE_PROBS}" \
+        --patch_pixel_mass_start "${PATCH_PIXEL_MASS_START}" --patch_pixel_mass_end "${PATCH_PIXEL_MASS_END}" \
+        --patch_quarter_prob_start "${PATCH_QUARTER_PROB_START}" --patch_quarter_prob_end "${PATCH_QUARTER_PROB_END}" \
+        --use_patch_t_schedule "${USE_PATCH_T_SCHEDULE}" --patch_t_crop_min "${PATCH_T_CROP_MIN}" \
+        --patch_t_half_boost "${PATCH_T_HALF_BOOST}" \
         --cfm_solver heun --cfm_ode_steps 30 --lr_schedule warmup_cosine --min_lr_ratio 0.1 \
         --grad_clip_max_norm "${GRAD_CLIP_MAX_NORM}" \
         --use_velocity_min_snr_weighting "${USE_VELOCITY_MIN_SNR_WEIGHTING}" --min_snr_gamma "${MIN_SNR_GAMMA}" \
-        --inference_every_n_epochs 500 --inference_num_images 4 \
+        --inference_every_n_epochs 1000 --inference_num_images 4 \
         --inference_train_anchor_exp "${INFERENCE_TRAIN_ANCHOR_EXP}" \
         --inference_val_anchor_exp "${INFERENCE_VAL_ANCHOR_EXP}" \
         --inference_anchor_timestep "${INFERENCE_ANCHOR_TIMESTEP}" \

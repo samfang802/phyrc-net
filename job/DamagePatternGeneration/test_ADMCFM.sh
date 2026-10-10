@@ -6,16 +6,11 @@
 #PBS -N test_ADMCFM_s12000
 
 cd "${PBS_O_WORKDIR:-$HOME/intership-project}"
-
-set +u
-source ~/.bashrc
-set -u
-conda activate internship
-
-module load cuda-12.4
+source job/DamagePatternGeneration/common.sh
+adm_env
 export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
 
-CKPT_PATH="${CKPT_PATH:-./results/DamagePatternGeneration/CFMADM/selfcondnoDI/checkpoint_step_014000.pt}"
+CKPT_PATH="${CKPT_PATH:-./results/DamagePatternGeneration/CFMADM/2026-09-18_02-15-49/checkpoint_step_014000.pt}"
 RESULT_DIR="${RESULT_DIR:-$(dirname "${CKPT_PATH}")}"
 EXTRACTOR_PATH="./phase1_extractor"
 BATCH_SIZE="${BATCH_SIZE:-32}"

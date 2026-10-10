@@ -13,12 +13,8 @@ import torch.nn.functional as F
 from PIL import Image
 from torch.utils.data import Dataset
 
-from src.dataset import (
-    _attach_vdi_labels,
-    _load_r_spall_map,
-    _resolve_r_spall_csv,
-    build_quant_image_tensor,
-)
+from src.data.quant_image import build_quant_image_tensor
+from src.data.vdi import _attach_vdi_labels, _load_r_spall_map, _resolve_r_spall_csv
 
 
 class DamageIndexPairwiseDataset(Dataset):
