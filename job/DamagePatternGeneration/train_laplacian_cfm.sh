@@ -9,21 +9,10 @@
 #PBS -N CFM_lap
 
 cd "${PBS_O_WORKDIR:-$HOME/intership-project}"
-
-set +u
-source ~/.bashrc
-set -u
-conda activate internship
-module load cuda-12.4
+source job/DamagePatternGeneration/common.sh
+adm_env
 
 BAND="${BAND:-d1}"
-USE_NICE=False
-NICE=10
-if [[ "${USE_NICE}" == "True" || "${USE_NICE}" == "true" || "${USE_NICE}" == "1" ]]; then
-    NICE_CMD=(nice -n "${NICE}")
-else
-    NICE_CMD=()
-fi
 
 AUG_PROB=0.5
 AUG_BLUR_PROB=0.15

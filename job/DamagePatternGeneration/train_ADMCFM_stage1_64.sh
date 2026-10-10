@@ -6,25 +6,8 @@
 #PBS -N CFM_s1_64
 
 cd "${PBS_O_WORKDIR:-$HOME/intership-project}"
-
-set +u
-source ~/.bashrc
-set -u
-conda activate internship
-
-module load cuda-12.4
-
-# Process priority toggle.
-# - USE_NICE=False  -> original behavior (default OS priority, no nice wrapper)
-# - USE_NICE=True   -> run training with nice -n ${NICE}
-# Override at submit: qsub -v USE_NICE=False ...  or  qsub -v NICE=15 ...
-USE_NICE=False
-NICE=10
-if [[ "${USE_NICE}" == "True" || "${USE_NICE}" == "true" || "${USE_NICE}" == "1" ]]; then
-    NICE_CMD=(nice -n "${NICE}")
-else
-    NICE_CMD=()
-fi
+source job/DamagePatternGeneration/common.sh
+adm_env
 
 # Centralized augmentation config (single source in this script).
 AUG_PROB=0.5
@@ -75,7 +58,7 @@ HF_AUX_T_MIN=0.7
 HF_AUX_EDGE_WEIGHT=1.0
 HF_AUX_HP_WEIGHT=0.5
 HF_AUX_HP_KERNEL=3
-USE_SELF_CONDITIONING=True
+USE_SELF_CONDITIONING="${USE_SELF_CONDITIONING:-True}"
 SELF_COND_TRAIN_PROB=0.5
 SELF_COND_WARMUP_START=2000
 SELF_COND_WARMUP_END=4000
@@ -108,7 +91,7 @@ CASCADE_PREDICT_RESIDUAL=True
 CASCADE_STAGE1_CKPT=""
 CASCADE_STAGE1_RESULT_DIR=""
 USE_UNDAMAGED_REF=False
-USE_GAMMA_FM_LOSS=True
+USE_GAMMA_FM_LOSS="${USE_GAMMA_FM_LOSS:-True}"
 DATA_PATH=id_list_val_R307.json
 INFERENCE_TRAIN_ANCHOR_EXP=R615
 INFERENCE_VAL_ANCHOR_EXP=R307
@@ -198,7 +181,8 @@ else
     exit 1
 fi
 
-"${NICE_CMD[@]}" python3 -u train_mixed.py --lr 1e-4 --epoch 3000 --batch_size "${BATCH_SIZE}" --num_workers "${NUM_WORKERS}" --train_virtual_repeat 100 --max_steps "${MAX_STEPS}" --warmup_steps "${WARMUP_STEPS}" --val_check_interval 10 --architecture CFMADM --loss_type CFMADM --data_path "${DATA_PATH}" \
+RUN_TAG="${RUN_TAG:-}"
+"${NICE_CMD[@]}" python3 -u train_mixed.py --lr 1e-4 --epoch 3000 --batch_size "${BATCH_SIZE}" --num_workers "${NUM_WORKERS}" --run_tag "${RUN_TAG}" --train_virtual_repeat 100 --max_steps "${MAX_STEPS}" --warmup_steps "${WARMUP_STEPS}" --val_check_interval 10 --architecture CFMADM --loss_type CFMADM --data_path "${DATA_PATH}" \
         --extractor_path "${EXTRACTOR_PATH}" --use_wandb \
         "${RESUME_ARGS[@]}" \
         --img_aug \

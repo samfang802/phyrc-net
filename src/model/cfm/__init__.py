@@ -1,4 +1,4 @@
-"""Conditional Flow Matching (CFM) damage-pattern generation package."""
+"""Conditional flow matching. Import CFMADM from src.model.cfm.module or ImageGeneration."""
 
 from src.model.cfm.condition import (
     build_generation_condition,
@@ -6,28 +6,24 @@ from src.model.cfm.condition import (
     build_scalar_condition,
     parse_fixed_di_values,
     parse_patch_size_probs,
-)
-from src.model.cfm.module import CFMADM
-from src.model.cfm.laplacian_module import LaplacianBandCFM, compose_laplacian_sample
-from src.model.cfm.tto import optimize_gru_features_tto, total_variation_loss
-from src.model.cfm.oracle_adapter import (
-    ResidualPhysicsAdapter,
-    adapter_loss,
-    extract_oracle_condition,
+    patch_size_probs_at_step,
+    scalar_condition_includes_di,
 )
 
 __all__ = [
-    "CFMADM",
-    "LaplacianBandCFM",
-    "compose_laplacian_sample",
     "build_generation_condition",
     "build_scalar_condition",
+    "scalar_condition_includes_di",
     "build_physics_condition",
     "parse_fixed_di_values",
     "parse_patch_size_probs",
-    "optimize_gru_features_tto",
-    "total_variation_loss",
-    "ResidualPhysicsAdapter",
-    "adapter_loss",
-    "extract_oracle_condition",
+    "patch_size_probs_at_step",
+    "CFMADM",
 ]
+
+
+def __getattr__(name):
+    if name == "CFMADM":
+        from src.model.cfm.module import CFMADM
+        return CFMADM
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

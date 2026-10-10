@@ -6,13 +6,8 @@
 #PBS -N inpaintC256
 
 cd "${PBS_O_WORKDIR:-$HOME/intership-project}"
-
-set +u
-source ~/.bashrc
-set -u
-conda activate internship
-
-module load cuda-12.4
+source job/DamagePatternGeneration/common.sh
+adm_env
 export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
 
 mkdir -p log
@@ -44,7 +39,7 @@ echo "[export_inpaint] CASCADE=${CASCADE_CKPT}"
 echo "[export_inpaint] OUT=${OUT_DIR}"
 echo "[export_inpaint] CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
 
-python3 -u scripts/export_inpaint_dataset.py \
+python3 -u scripts/export/export_inpaint_dataset.py \
     --stage1_checkpoint "${STAGE1_CKPT}" \
     --stage1_result_dir "${STAGE1_DIR}" \
     --cascade_checkpoint "${CASCADE_CKPT}" \

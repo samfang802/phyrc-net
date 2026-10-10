@@ -2,7 +2,7 @@
 
 This repository trains a **frozen hysteresis GRU** and a **conditional flow-matching (CFM)** generator that synthesizes RC-column damage images from structural signals.
 
-The default generator is **V9 / selfcondnoDI**: pixel-space ADM U-Net, split gated AdaGN, zeroed DI, classic self-conditioning, VSS at L3/U3, and Patch Diffusion. See [ARCHITECTURE_UPDATE_V9.md](ARCHITECTURE_UPDATE_V9.md).
+The default generator is **V9 / selfcondnoDI**: pixel-space ADM U-Net, split gated AdaGN, zeroed DI, classic self-conditioning, VSS at L3/U3, and Patch Diffusion. See [docs/ARCHITECTURE_UPDATE_V9.md](docs/ARCHITECTURE_UPDATE_V9.md).
 
 Built with PyTorch and PyTorch Lightning.
 
@@ -10,37 +10,32 @@ Built with PyTorch and PyTorch Lightning.
 
 ```text
 intership-project/
-|- argument/                         # CLI per train script
-|  |- argument_mixed.py              # Stage-3 CFM flags (--self_condition)
-|  |- argument_hysteresis.py
-|  |- argument_resnet18_siamese.py
-|- job/
-|  |- DamagePatternGeneration/train_ADMCFM.sh   # V9 default job
-|  |- DamagePatternGeneration/test_ADMCFM.sh
-|  |- HysteresisPrediction/
-|  |- DamageQuantification/          # Siamese (and older ViT) DI trainers
-|- Data/
-|  |- Hysteresis/
-|  |- DamagePattern/
+|- argument/
+|  |- mixed.py                         # Stage-3 CFM flags
+|  |- argument_mixed.py                # re-export used by train_mixed.py
+|- job/DamagePatternGeneration/
+|  |- common.sh                        # conda, CUDA, nice
+|  |- train_ADMCFM.sh                  # V9 default job
 |- src/
-|  |- dataset.py                     # HystereticDataset, PatternLoopDataset, DI datasets
+|  |- data/                            # dataset implementations
+|  |- dataset.py                       # import path kept for trainers
 |  |- model/
-|  |  |- HystereticPrediction.py     # GRU / LSTM
-|  |  |- ImageGeneration.py          # CFMADM facade
-|  |  |- cfm/                        # OT-CFM Lightning module + mixins
-|  |  |- Component/cfm_adm.py        # ADMUNetCFM
-|  |  |- ResNet18_Siamese_Lightning.py
-|  |- losses/lpips.py                # perceptual metric for eval scripts
-|- train_mixed.py                    # Stage-3 entry
-|- train_hysteresis.py
-|- train_resnet18_siamese.py
-|- test_cfm_checkpoint.py
-|- ARCHITECTURE_UPDATE_V9.md
+|  |  |- adm.py                        # ADMUNetCFM
+|  |  |- vss.py
+|  |  |- cfm/                          # default CFM
+|  |  |- exp/                          # wavelet, Laplacian, FreCaS, MAFP, ...
+|  |  |- ImageGeneration.py
+|- scripts/
+|  |- eval/  viz/  export/
+|- train_mixed.py
+|- docs/                               # current notes; older ones in docs/archive/
 ```
 
-Historical architecture notes: `ARCHITECTURE.md`, `ARCHITECTURE_UPDATE_V2.md`–`V8.md`.
+Project notes are in [docs/](docs/README.md). Historical architecture notes are in `docs/archive/`.
 
 ## Environment Setup
+
+
 
 ### 1) Create and activate a virtual environment
 
@@ -49,12 +44,16 @@ python -m venv .venv
 source .venv/bin/activate
 ```
 
+
+
 ### 2) Install dependencies
 
 ```bash
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
+
+
 
 ### 3) Install PyTorch
 
@@ -63,6 +62,8 @@ Use the wheel that matches your CUDA: [https://pytorch.org/get-started/locally/]
 ```bash
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 ```
+
+
 
 ### 4) Optional: Weights & Biases
 
@@ -90,6 +91,8 @@ Generation also needs a frozen extractor at `./phase1_extractor/` (`best.ckpt` +
 bash job/DamagePatternGeneration/prepare_extractor_from_hf.sh
 ```
 
+
+
 ## How to Run
 
 Run all commands from the project root.
@@ -102,7 +105,11 @@ Only needed if you are not using `phase1_extractor`:
 python train_hysteresis.py --architecture HystereticGRU --epoch 100 --batch_size 8
 ```
 
+
+
 ### 2) Train damage-pattern generator (Stage 3, V9)
+
+This version uses nearly 20 GB of VRAM.
 
 Cluster (matches `results/DamagePatternGeneration/CFMADM/selfcondnoDI`):
 
@@ -155,7 +162,7 @@ Older ViT `train_quantification.py` remains available; V9 generation does not lo
 
 ## Evaluation scripts
 
-Under `scripts/`, for example:
+Under `scripts/eval/`, for example:
 
 - `eval_fid_ssim_lpips_cfm_cgan.py`
 - `eval_cfm_generated_r2_siamese.py`
@@ -180,6 +187,8 @@ Reference V9 run: `results/DamagePatternGeneration/CFMADM/selfcondnoDI/`.
 - V9 is **not** the V8 CrossAttention U-Net and **not** the WaveletUNet job. Do not mix those checkpoints with `train_ADMCFM.sh` as it stands now.
 - Laplacian / cascade / VAE-latent jobs under `job/DamagePatternGeneration/` are optional experiments.
 - `--regressor_path` is only required when `--add_DI_loss True`.
+
+
 
 ## Citation
 

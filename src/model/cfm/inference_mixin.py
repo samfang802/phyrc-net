@@ -49,6 +49,9 @@ class CFMInferenceMixin:
 
 
     def _inference_candidate_cap(self):
+        # The growth sequence needs every val frame of one column, not a DI sample.
+        if getattr(self, "use_spall_growth_mask", False) or getattr(self, "use_paired_bridge", False):
+            return 100000
         return max(32, int(self.inference_num_images) * 24)
 
 
@@ -103,6 +106,103 @@ class CFMInferenceMixin:
             if condition_mask is not None:
                 entry["condition_mask"] = condition_mask[sample_idx].detach().cpu()
             pool.append(entry)
+
+
+    @torch.no_grad()
+    def _stash_spall_mask_examples(self, z1, ar_pack, g_curr, exp, timestep, di, direction):
+        """Full-frame m and m* for the mask-only check. One val pass, then discarded."""
+        from src.model.cfm.spall_mask import coarse_coords, coarse_pool, extent_mask
+
+        z_prev = self._encode_to_target_space(ar_pack["image_prev"])
+        g_prev = self.process_physics_condition(ar_pack.get("hidden_state_prev"))
+        has_prev = ar_pack.get("has_prev")
+        if has_prev is None:
+            has_prev = torch.ones(z1.shape[0], device=z1.device, dtype=z1.dtype)
+        b = z1.shape[0]
+        grid = int(self.spall_mask_grid)
+        hp = has_prev.reshape(b).to(device=z1.device) >= 0.5
+        hp_f = hp.view(b, 1, 1, 1).to(dtype=z1.dtype)
+        m_star = extent_mask(
+            z1,
+            grid,
+            float(self.spall_dark_level),
+            self.spall_bg_quantile,
+            self.spall_bg_target,
+            self.spall_border_gap,
+            seed_margin=float(getattr(self, "spall_seed_margin", 0.2)),
+        )
+        pool = coarse_pool(z_prev, grid) * hp_f
+        g_prev = g_prev * hp.view(b, 1).to(dtype=g_prev.dtype)
+        logits = self.spall_mask_head(
+            pool, g_prev, g_curr, coarse_coords(None, grid, pool)
+        )
+        m_prob = torch.sigmoid(logits)
+        stash = getattr(self, "_spall_mask_preview", None)
+        if stash is None:
+            stash = []
+            self._spall_mask_preview = stash
+        for i in range(b):
+            dir_i = direction[i].detach().float().cpu().reshape(-1)
+            stash.append(
+                {
+                    "image": torch.clamp(z1[i].detach().cpu() * 0.5 + 0.5, 0.0, 1.0),
+                    "m_prob": m_prob[i].detach().cpu(),
+                    "m_star": m_star[i].detach().cpu(),
+                    "timestep": int(self._extract_batch_field(timestep, i)),
+                    "di": float(self._extract_batch_field(di, i)),
+                    "exp": str(self._extract_batch_field(exp, i)),
+                    "direction": tuple(round(float(v), 4) for v in dir_i.tolist()),
+                }
+            )
+
+
+    def _save_spall_mask_preview(self, step_num):
+        """Photo, target extent, and predicted extent. Bright cells are the dark region."""
+        rows = list(getattr(self, "_spall_mask_preview", []) or [])
+        if not rows:
+            print(f"[CFM] No spall mask preview samples at step {step_num}", flush=True)
+            return
+        groups = {}
+        for row in rows:
+            groups.setdefault((row["exp"], row["direction"]), []).append(row)
+        key = max(groups, key=lambda k: len({r["timestep"] for r in groups[k]}))
+        by_t = {}
+        for row in groups[key]:
+            by_t.setdefault(int(row["timestep"]), row)
+        ordered = [by_t[t] for t in sorted(by_t)]
+        if len(ordered) > 6:
+            pick = [int(round(i * (len(ordered) - 1) / 5)) for i in range(6)]
+            ordered = [ordered[i] for i in pick]
+        n = len(ordered)
+        fig, axes = plt.subplots(3, n, figsize=(n * 1.45, 4.6))
+        if n == 1:
+            axes = np.array(axes).reshape(3, 1)
+        labels = ("photo", "m*", "m")
+        for c, row in enumerate(ordered):
+            photo = row["image"]
+            if photo.ndim == 3:
+                photo = photo[0] if photo.shape[0] != 3 else photo.permute(1, 2, 0)
+            axes[0, c].imshow(photo.numpy(), cmap="gray", vmin=0, vmax=1)
+            axes[1, c].imshow(row["m_star"][0].numpy(), cmap="gray", vmin=0, vmax=1, interpolation="nearest")
+            axes[2, c].imshow(row["m_prob"][0].numpy(), cmap="gray", vmin=0, vmax=1, interpolation="nearest")
+            axes[0, c].set_title(f"t={row['timestep']}\nDI {row['di']:.2f}", fontsize=8)
+            for r in range(3):
+                axes[r, c].set_xticks([])
+                axes[r, c].set_yticks([])
+                if c == 0:
+                    axes[r, c].set_ylabel(labels[r], fontsize=8)
+        exp, direction = key
+        fig.suptitle(
+            f"step {step_num}  {exp} {direction}  bright = darker than {float(self.spall_dark_level):.2f}",
+            fontsize=10,
+        )
+        fig.tight_layout()
+        out_dir = os.path.join(self.result_dir, "inference_samples")
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, f"spall_m_step_{int(step_num):05d}.png")
+        fig.savefig(out_path, dpi=140, bbox_inches="tight")
+        plt.close(fig)
+        print(f"[CFM] Spall mask preview: {out_path}", flush=True)
 
 
     def _select_fixed_anchor(self, candidates, split="val", anchor_exp=None):
@@ -180,6 +280,193 @@ class CFMInferenceMixin:
         return selected
 
 
+    @staticmethod
+    def _direction_key(direction):
+        if torch.is_tensor(direction):
+            vals = direction.detach().float().reshape(-1).tolist()
+            return tuple(round(float(v), 4) for v in vals)
+        return (str(direction),)
+
+
+    def _select_spall_sequence_anchors(self, candidates, split="val", anchor_exp=None):
+        """One column, one loading direction. Keep ``inference_num_images`` frames, spread in time."""
+        cache_attr = f"_fixed_{split}_spall_sequence"
+        cached = getattr(self, cache_attr, None)
+        if cached:
+            return cached
+
+        required_exp = str(anchor_exp or "").strip()
+        pool = [c for c in candidates if str(c.get("split", split)) == split]
+        if required_exp:
+            pool = [c for c in pool if str(c["exp"]) == required_exp]
+        if not pool:
+            print(
+                f"[CFM] No {split} spall sequence for exp={required_exp or 'any'} "
+                f"(candidates={len(candidates)})",
+                flush=True,
+            )
+            return []
+
+        groups = {}
+        for cand in pool:
+            groups.setdefault(self._direction_key(cand["direction"]), []).append(cand)
+        direction_key = min(
+            groups,
+            key=lambda key: (-len(groups[key]), key),
+        )
+        by_t = {}
+        for cand in groups[direction_key]:
+            t = int(cand["timestep"])
+            prev = by_t.get(t)
+            if prev is None or str(cand["sample_uid"]) < str(prev["sample_uid"]):
+                by_t[t] = cand
+        ordered = [by_t[t] for t in sorted(by_t)]
+        n_keep = max(1, int(self.inference_num_images))
+        if len(ordered) > n_keep:
+            if n_keep == 1:
+                keep_idx = [0]
+            else:
+                keep_idx = []
+                for i in range(n_keep):
+                    idx = int(round(i * (len(ordered) - 1) / (n_keep - 1)))
+                    if idx not in keep_idx:
+                        keep_idx.append(idx)
+            selected = [ordered[i] for i in keep_idx]
+        else:
+            selected = ordered
+        setattr(self, cache_attr, selected)
+        ts = [int(a["timestep"]) for a in selected]
+        print(
+            f"[CFM] Spall {split} sequence: exp={selected[0]['exp']} "
+            f"direction={direction_key} show={len(selected)}/{len(ordered)} "
+            f"t={ts}",
+            flush=True,
+        )
+        return selected
+
+
+    def _select_bridge_sequence_anchors(self, candidates, split="val", anchor_exp=None):
+        """Every val frame of one column, in time order. The bridge steps between neighbors."""
+        cache_attr = f"_fixed_{split}_bridge_sequence"
+        cached = getattr(self, cache_attr, None)
+        if cached:
+            return cached
+
+        required_exp = str(anchor_exp or "").strip()
+        pool = [c for c in candidates if str(c.get("split", split)) == split]
+        if required_exp:
+            pool = [c for c in pool if str(c["exp"]) == required_exp]
+        if not pool:
+            print(
+                f"[CFM] No {split} bridge sequence for exp={required_exp or 'any'} "
+                f"(candidates={len(candidates)})",
+                flush=True,
+            )
+            return []
+
+        groups = {}
+        for cand in pool:
+            groups.setdefault(self._direction_key(cand["direction"]), []).append(cand)
+        direction_key = min(groups, key=lambda key: (-len(groups[key]), key))
+        by_t = {}
+        for cand in groups[direction_key]:
+            t = int(cand["timestep"])
+            prev = by_t.get(t)
+            if prev is None or str(cand["sample_uid"]) < str(prev["sample_uid"]):
+                by_t[t] = cand
+        selected = [by_t[t] for t in sorted(by_t)]
+        setattr(self, cache_attr, selected)
+        ts = [int(a["timestep"]) for a in selected]
+        print(
+            f"[CFM] Bridge {split} sequence: exp={selected[0]['exp']} "
+            f"direction={direction_key} frames={len(selected)} t={ts[0]}..{ts[-1]}",
+            flush=True,
+        )
+        return selected
+
+
+    def _run_bridge_sequence_inference(self, anchors):
+        """Frame 0 from noise. Each later frame integrates from the previous output."""
+        conds = []
+        gru_feats = []
+        masks = []
+        for anchor in anchors:
+            hidden_state = anchor["hidden_state"].unsqueeze(0).to(self.device)
+            direction = anchor["direction"].unsqueeze(0).to(self.device)
+            info = anchor["info"].unsqueeze(0).to(self.device)
+            di = torch.tensor([[float(anchor["gt_di"])]], device=self.device, dtype=info.dtype)
+            with torch.no_grad():
+                c, gru_feat = self._unpack_conditions(
+                    info, hidden_state, direction, di, exp=anchor.get("exp")
+                )
+            conds.append(c)
+            gru_feats.append(gru_feat)
+            damage_mask = None
+            if anchor.get("condition_mask") is not None:
+                damage_mask = anchor["condition_mask"].unsqueeze(0).to(self.device, dtype=info.dtype)
+                if damage_mask.ndim == 3:
+                    damage_mask = damage_mask.unsqueeze(1)
+                damage_mask = self._align_spatial_to_target(damage_mask)
+            masks.append(damage_mask)
+
+        with torch.no_grad():
+            frames = self.sample_paired_bridge_sequence(conds, gru_feats, damage_mask=masks)
+
+        items = []
+        for anchor, frame in zip(anchors, frames):
+            sampled_image = self._decode_from_target_space(frame)
+            sampled_vis = torch.clamp(sampled_image * 0.5 + 0.5, 0.0, 1.0)[0].detach().cpu()
+            items.append(
+                {
+                    "di_value": float(anchor["gt_di"]),
+                    "sampled_vis": sampled_vis,
+                    "anchor": anchor,
+                }
+            )
+        return items
+
+
+    def _run_spall_sequence_inference(self, anchors):
+        """Walk time with ``sample_spall_sequence``. Later frames see the generated previous frame."""
+        conds = []
+        gru_feats = []
+        masks = []
+        for anchor in anchors:
+            hidden_state = anchor["hidden_state"].unsqueeze(0).to(self.device)
+            direction = anchor["direction"].unsqueeze(0).to(self.device)
+            info = anchor["info"].unsqueeze(0).to(self.device)
+            di = torch.tensor([[float(anchor["gt_di"])]], device=self.device, dtype=info.dtype)
+            with torch.no_grad():
+                c, gru_feat = self._unpack_conditions(
+                    info, hidden_state, direction, di, exp=anchor.get("exp")
+                )
+            conds.append(c)
+            gru_feats.append(gru_feat)
+            damage_mask = None
+            if anchor.get("condition_mask") is not None:
+                damage_mask = anchor["condition_mask"].unsqueeze(0).to(self.device, dtype=info.dtype)
+                if damage_mask.ndim == 3:
+                    damage_mask = damage_mask.unsqueeze(1)
+                damage_mask = self._align_spatial_to_target(damage_mask)
+            masks.append(damage_mask)
+
+        with torch.no_grad():
+            frames = self.sample_spall_sequence(conds, gru_feats, damage_mask=masks)
+
+        items = []
+        for anchor, frame in zip(anchors, frames):
+            sampled_image = self._decode_from_target_space(frame)
+            sampled_vis = torch.clamp(sampled_image * 0.5 + 0.5, 0.0, 1.0)[0].detach().cpu()
+            items.append(
+                {
+                    "di_value": float(anchor["gt_di"]),
+                    "sampled_vis": sampled_vis,
+                    "anchor": anchor,
+                }
+            )
+        return items
+
+
     def _get_cascade_stage1(self):
         ref = getattr(self, "_cascade_stage1_ref", None)
         if isinstance(ref, (list, tuple)) and len(ref) > 0:
@@ -194,7 +481,12 @@ class CFMInferenceMixin:
         if stage1 is not None:
             stage1.to(self.device)
             stage1.eval()
+            stage1.facfg_wl = getattr(self, "facfg_wl", None)
+            stage1.facfg_wh = getattr(self, "facfg_wh", None)
+            stage1._facfg_gru_unc = getattr(self, "_facfg_gru_unc", None)
+            stage1._facfg_logged = getattr(self, "_facfg_logged", False)
             item = stage1._run_inference_for_anchor(anchor, di_value)
+            self._facfg_logged = bool(getattr(stage1, "_facfg_logged", False))
             vis = item["sampled_vis"].unsqueeze(0).to(device=self.device, dtype=torch.float32)
             z_lr = vis * 2.0 - 1.0
             if tuple(z_lr.shape[-2:]) != (hr, hr):
@@ -286,6 +578,16 @@ class CFMInferenceMixin:
                     z0=z0,
                     gru_feat=gru_feat,
                     damage_mask=damage_mask,
+                )
+            elif bool(getattr(self, "use_sde_sample", False)):
+                if float(t_start) > 0.0:
+                    raise ValueError("SDE sampling does not support t_start > 0")
+                sampled = self.sample_with_sde(
+                    c,
+                    z0=z0,
+                    gru_feat=gru_feat,
+                    damage_mask=damage_mask,
+                    sde_sigma=float(getattr(self, "cfm_sde_sigma", 1.0)),
                 )
             else:
                 sampled = self.sample_with_ode(
@@ -547,6 +849,51 @@ class CFMInferenceMixin:
         if wandb.run is not None:
             wandb.log(
                 {f"CFM/FixedDI/step_{step_num:05d}": wandb.Image(fig)},
+                step=step_num,
+            )
+        plt.close(fig)
+
+
+    def _save_spall_sequence_panel(self, items, step_num, kind="spall sequence"):
+        """Val GT (top of each band) and the chained sample (bottom), in time order."""
+        if not items:
+            return
+        cols = 8
+        n = len(items)
+        bands = (n + cols - 1) // cols
+        fig, axes = plt.subplots(
+            bands * 2,
+            cols,
+            figsize=(cols * 1.6, bands * 3.4),
+        )
+        axes = np.atleast_2d(axes)
+        for ax in axes.ravel():
+            ax.axis("off")
+        for i, item in enumerate(items):
+            band, col = divmod(i, cols)
+            anchor = item["anchor"]
+            gt_ax = axes[band * 2, col]
+            gen_ax = axes[band * 2 + 1, col]
+            gt_ax.imshow(anchor["real"].permute(1, 2, 0).numpy())
+            gt_ax.set_title(f"GT t={int(anchor['timestep'])}", fontsize=7)
+            gt_ax.axis("off")
+            gen_ax.imshow(item["sampled_vis"].permute(1, 2, 0).numpy())
+            gen_ax.set_title(f"GM t={int(anchor['timestep'])}", fontsize=7)
+            gen_ax.axis("off")
+        anchor0 = items[0]["anchor"]
+        fig.suptitle(
+            f"step {step_num} · Val {anchor0['exp']} · {kind} · {n} frames",
+            fontsize=10,
+        )
+        plt.tight_layout()
+        save_dir = os.path.join(self.result_dir, "inference_samples")
+        os.makedirs(save_dir, exist_ok=True)
+        fig_path = os.path.join(save_dir, f"fixed_di_step_{step_num:05d}.png")
+        fig.savefig(fig_path, dpi=120, bbox_inches="tight")
+        print(f"[CFM] Saved spall-sequence inference samples: {fig_path}", flush=True)
+        if wandb.run is not None:
+            wandb.log(
+                {f"CFM/SpallSeq/step_{step_num:05d}": wandb.Image(fig)},
                 step=step_num,
             )
         plt.close(fig)

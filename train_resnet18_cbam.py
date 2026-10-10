@@ -78,9 +78,7 @@ def main():
         flush=True,
     )
 
-    model = importlib.import_module("src.model.ResNet18_CBAM_Regressor").__dict__[
-        "ResNet18CBAMLightning"
-    ](**vars(args))
+    model = getattr(importlib.import_module("src.model.ResNet18_CBAM_Regressor"), "ResNet18CBAMLightning")(**vars(args))
     n_param = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(
         f"[train_resnet18_cbam] trainable params={n_param/1e6:.3f}M "

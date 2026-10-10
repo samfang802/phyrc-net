@@ -92,7 +92,7 @@ if __name__ == "__main__":
     # save_args
     save_args(args)
 
-    model = importlib.import_module(f"src.model.DamageQuantification").__dict__["DamageQuantification"](**vars(args))
+    model = getattr(importlib.import_module(f"src.model.DamageQuantification"), "DamageQuantification")(**vars(args))
     print(f"Total number of trainable parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad)/1024/1024:.4f} MB")
     print(model)
 

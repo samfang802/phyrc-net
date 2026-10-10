@@ -6,6 +6,13 @@ import torch
 import torch.nn.functional as F
 from torchvision.transforms.functional import gaussian_blur
 
+from src.model.cfm.condition import (
+    boost_half_by_cfm_t,
+    patch_pixel_mass,
+    patch_size_probs_at_step,
+    patch_size_probs_pixel_mass_at_step,
+)
+
 
 class CFMPatchMixin:
     @staticmethod
@@ -17,10 +24,77 @@ class CFMPatchMixin:
         return grid_x, grid_y
 
 
-    def _sample_stochastic_patch_size(self, full_size):
-        """Stochastic patch schedule (paper balance): 50% full / 30% half / 20% quarter."""
+    def _current_train_step(self):
+        if getattr(self, "_trainer", None) is not None:
+            return int(self.global_step)
+        return 0
+
+    def _patch_size_probs_at_step(self, step=None):
+        if step is None:
+            step = self._current_train_step()
+        total_steps = max(1, int(getattr(self, "total_steps", 1)))
+        enabled = bool(getattr(self, "use_patch_prob_schedule", False))
+        mode = str(getattr(self, "patch_schedule_mode", "two_segment")).lower()
+        if enabled and mode == "pixel_mass":
+            probs = patch_size_probs_pixel_mass_at_step(
+                step,
+                mass_start=float(getattr(self, "patch_pixel_mass_start", 0.55)),
+                mass_end=float(getattr(self, "patch_pixel_mass_end", 0.64)),
+                quarter_start=float(getattr(self, "patch_quarter_prob_start", 0.15)),
+                quarter_end=float(getattr(self, "patch_quarter_prob_end", 0.10)),
+                total_steps=total_steps,
+                enabled=True,
+                fallback_probs=self.patch_size_probs,
+            )
+        else:
+            mid_frac = float(getattr(self, "patch_schedule_mid_frac", 0.2))
+            end_frac = float(getattr(self, "patch_schedule_end_frac", 0.7))
+            probs = patch_size_probs_at_step(
+                step,
+                getattr(self, "patch_size_probs_start", self.patch_size_probs),
+                self.patch_size_probs,
+                getattr(self, "patch_size_probs_end", self.patch_size_probs),
+                mid_step=int(round(mid_frac * total_steps)),
+                end_start_step=int(round(end_frac * total_steps)),
+                total_steps=total_steps,
+                enabled=enabled,
+            )
+        self._last_patch_size_probs = list(probs)
+        return probs
+
+    def _patch_size_probs_for_batch(self, flow_t=None, step=None):
+        """Iteration schedule, then optional CFM-t half boost averaged over sample t.
+
+        Batch-mean t sits near 0.5 and would null the ramp. Average the per-sample
+        boosted (full, half, quarter) triples, then sample one shared crop size.
+        """
+        probs = self._patch_size_probs_at_step(step=step)
+        use_t = bool(getattr(self, "use_patch_t_schedule", False))
+        extra = float(getattr(self, "patch_t_half_boost", 0.0))
+        self._last_patch_t_mean = None
+        if flow_t is None:
+            return probs
+        t_vals = flow_t.detach().float().reshape(-1)
+        self._last_patch_t_mean = float(t_vals.mean().item())
+        if not (use_t and extra > 0.0 and t_vals.numel() > 0):
+            return probs
+        t_min = float(getattr(self, "patch_t_crop_min", 0.5))
+        acc = [0.0, 0.0, 0.0]
+        for t_i in t_vals.tolist():
+            boosted = boost_half_by_cfm_t(probs, t_i, t_min=t_min, extra_half=extra)
+            acc[0] += boosted[0]
+            acc[1] += boosted[1]
+            acc[2] += boosted[2]
+        n = float(t_vals.numel())
+        probs = [a / n for a in acc]
+        self._last_patch_size_probs = list(probs)
+        return probs
+
+    def _sample_stochastic_patch_size(self, full_size, flow_t=None):
+        """Sample full / half / quarter from the optional patch-size schedule."""
+        p_full, p_half, _p_quarter = self._patch_size_probs_for_batch(flow_t=flow_t)
+        self._last_patch_pixel_mass = float(patch_pixel_mass((p_full, p_half, _p_quarter)))
         u = float(torch.rand((), device="cpu").item())
-        p_full, p_half, _p_quarter = self.patch_size_probs
         if u < p_full:
             return int(full_size)
         if u < p_full + p_half:
@@ -28,7 +102,9 @@ class CFMPatchMixin:
         return int(full_size // 4)
 
 
-    def _apply_patch_crop(self, z1, valid_mask=None, condition_mask=None, z0=None, z_aux=None):
+    def _apply_patch_crop(
+        self, z1, valid_mask=None, condition_mask=None, z0=None, z_aux=None, flow_t=None
+    ):
         """
         Random-crop a mini-batch to a shared patch size and build matching XY coords.
 
@@ -47,11 +123,12 @@ class CFMPatchMixin:
             raise ValueError(f"z_aux shape {tuple(z_aux.shape)} must match z1 {tuple(z1.shape)}")
         full_size = int(height)
         patch_size = (
-            self._sample_stochastic_patch_size(full_size)
+            self._sample_stochastic_patch_size(full_size, flow_t=flow_t)
             if self.training
             else full_size
         )
         patch_size = max(1, min(int(patch_size), full_size))
+        self._last_patch_size = int(patch_size)
 
         grid_x, grid_y = self._build_full_coordinate_maps(
             full_size, full_size, device=z1.device, dtype=z1.dtype
@@ -128,8 +205,7 @@ class CFMPatchMixin:
         if not self.use_self_conditioning:
             return 0.0
         if step is None:
-            # Lightning's `.trainer` raises if not attached; use private attr for offline calls.
-            step = int(self.global_step) if getattr(self, "_trainer", None) is not None else 0
+            step = self._current_train_step()
         step = int(step)
         p_max = float(self.self_cond_train_prob)
         start = int(self.self_cond_warmup_start)
@@ -142,6 +218,8 @@ class CFMPatchMixin:
 
 
     def _concat_coord_channels(self, image_tensor, coords):
+        if bool(getattr(self, "zero_patch_coords", False)):
+            coords = torch.zeros_like(coords)
         return torch.cat([image_tensor, coords], dim=1)
 
 
@@ -259,10 +337,10 @@ class CFMPatchMixin:
         return (sampled + lr_cond).clamp(-1.0, 1.0)
 
 
-    def _build_velocity_net_input(self, z_image, coords=None, self_cond=None, lr_cond=None):
+    def _build_velocity_net_input(self, z_image, coords=None, self_cond=None, lr_cond=None, spall_cond=None):
         """
         Assemble U-Net spatial input (mask is concatenated inside ADMUNetCFM.forward):
-          [ z_image (C) | self_cond (C) | lr_cond (C) | coords_x | coords_y ]
+          [ z_image (C) | self_cond (C) | lr_cond (C) | coords_x | coords_y | pool(x_prev) | m ]
         """
         if self.use_self_conditioning:
             if self_cond is None:
@@ -298,7 +376,19 @@ class CFMPatchMixin:
         if self.use_patch_diffusion:
             if coords is None:
                 raise ValueError("coords are required when use_patch_diffusion=True")
-            return self._concat_coord_channels(z_in, coords)
+            z_in = self._concat_coord_channels(z_in, coords)
+        if self.use_spall_growth_mask:
+            if spall_cond is None:
+                spall_cond = z_image.new_zeros(
+                    z_image.shape[0], 2, z_image.shape[-2], z_image.shape[-1]
+                )
+            if spall_cond.shape[1] != 2 or spall_cond.shape[-2:] != z_image.shape[-2:]:
+                raise ValueError(
+                    f"spall_cond must be [B,2,H,W] matching z_image, got {tuple(spall_cond.shape)}"
+                )
+            z_in = torch.cat([z_in, spall_cond.to(dtype=z_in.dtype)], dim=1)
+        elif spall_cond is not None:
+            raise ValueError("spall_cond provided but use_spall_growth_mask=False")
         return z_in
 
 
@@ -312,11 +402,12 @@ class CFMPatchMixin:
         gru_feat=None,
         self_cond=None,
         lr_cond=None,
+        spall_cond=None,
         return_attn_map=False,
         ref_feat=None,
     ):
         model_in = self._build_velocity_net_input(
-            z_image, coords=coords, self_cond=self_cond, lr_cond=lr_cond
+            z_image, coords=coords, self_cond=self_cond, lr_cond=lr_cond, spall_cond=spall_cond
         )
         if ref_feat is None:
             ref_feat = getattr(self, "_undamaged_ref_embed", None)

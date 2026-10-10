@@ -6,25 +6,8 @@
 #PBS -N CFM_vaeMAFP
 
 cd "${PBS_O_WORKDIR:-$HOME/intership-project}"
-
-set +u
-source ~/.bashrc
-set -u
-conda activate internship
-
-module load cuda-12.4
-
-# Process priority toggle.
-# - USE_NICE=False  -> original behavior (default OS priority, no nice wrapper)
-# - USE_NICE=True   -> run training with nice -n ${NICE}
-# Override at submit: qsub -v USE_NICE=False ...  or  qsub -v NICE=15 ...
-USE_NICE=False
-NICE=10
-if [[ "${USE_NICE}" == "True" || "${USE_NICE}" == "true" || "${USE_NICE}" == "1" ]]; then
-    NICE_CMD=(nice -n "${NICE}")
-else
-    NICE_CMD=()
-fi
+source job/DamagePatternGeneration/common.sh
+adm_env
 
 # Centralized augmentation config (single source in this script).
 AUG_PROB=0.5

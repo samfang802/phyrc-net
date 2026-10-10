@@ -22,6 +22,38 @@ def _load_args_from_result_dir(result_dir):
     return argparse.Namespace(**json.load(open(args_path, "r")))
 
 
+def _load_state_prefix(module, ckpt_path, prefix):
+    """Load one submodule from a Lightning checkpoint. ``prefix`` includes the dot."""
+    os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
+    torch.serialization.add_safe_globals([np._core.multiarray.scalar])
+    payload = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    state = payload.get("state_dict", payload)
+    sub = {key[len(prefix):]: value for key, value in state.items() if key.startswith(prefix)}
+    if not sub:
+        raise KeyError(f"No keys with prefix {prefix!r} in {ckpt_path}")
+    missing, unexpected = module.load_state_dict(sub, strict=True)
+    print(
+        f"[train_mixed] Loaded {prefix} from {ckpt_path} "
+        f"tensors={len(sub)} missing={len(missing)} unexpected={len(unexpected)}",
+        flush=True,
+    )
+
+
+def _load_spall_g_init(model, args):
+    velocity_init = str(getattr(args, "velocity_init", "") or "").strip()
+    mask_ckpt = str(getattr(args, "spall_mask_ckpt", "") or "").strip()
+    if velocity_init:
+        _load_state_prefix(model.velocity_net, velocity_init, "velocity_net.")
+    if mask_ckpt:
+        if getattr(model, "spall_mask_head", None) is None:
+            raise ValueError("spall_mask_ckpt requires use_spall_growth_mask")
+        _load_state_prefix(model.spall_mask_head, mask_ckpt, "spall_mask_head.")
+    if bool(getattr(args, "freeze_spall_mask", False)):
+        for param in model.spall_mask_head.parameters():
+            param.requires_grad = False
+        print("[train_mixed] spall_mask_head frozen", flush=True)
+
+
 def _save_augmented_grid_preview(dataset, result_dir, num_images=100, grid_size=10):
     total = len(dataset)
     if total == 0:
@@ -266,7 +298,7 @@ if __name__ == "__main__":
     print(f"[train_mixed] Loading extractor from: {args.extractor_path}", flush=True)
     extractor_path = args.extractor_path
     extractor_args = _load_args_from_result_dir(extractor_path)
-    extractor = importlib.import_module(f"src.model.HystereticPrediction").__dict__[extractor_args.architecture](**vars(extractor_args))
+    extractor = getattr(importlib.import_module(f"src.model.HystereticPrediction"), extractor_args.architecture)(**vars(extractor_args))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     extractor = extractor.to(device)
     extractor_ckpt = _resolve_required_match(os.path.join(extractor_path, "**/best.ckpt"), "extractor checkpoint")
@@ -338,7 +370,7 @@ if __name__ == "__main__":
             raise ValueError("Please provide --regressor_path when --add_DI_loss is enabled.")
         regressor_path = args.regressor_path
         regressor_args = _load_args_from_result_dir(regressor_path)
-        regressor = importlib.import_module(f"src.model.DamageQuantification").__dict__["DamageQuantification"](**vars(regressor_args))
+        regressor = getattr(importlib.import_module(f"src.model.DamageQuantification"), "DamageQuantification")(**vars(regressor_args))
         regressor_ckpt = _resolve_required_match(os.path.join(regressor_path, "**/best_*.ckpt"), "regressor checkpoint")
         state_dict = torch.load(regressor_ckpt, map_location=device, weights_only=False)["state_dict"]
         status = regressor.load_state_dict(state_dict)
@@ -358,7 +390,8 @@ if __name__ == "__main__":
     save_args(args)
 
     print(f"[train_mixed] Building model: {args.architecture}", flush=True)
-    model = importlib.import_module(f"src.model.ImageGeneration").__dict__[args.architecture](regressor=regressor,**vars(args))
+    model = getattr(importlib.import_module(f"src.model.ImageGeneration"), args.architecture)(regressor=regressor,**vars(args))
+    _load_spall_g_init(model, args)
     print(
         f"[train_mixed] Trainable params: {sum(p.numel() for p in model.parameters() if p.requires_grad)/1024/1024:.4f} MB",
         flush=True,
@@ -370,7 +403,7 @@ if __name__ == "__main__":
             project = "Opensees Based damage Patterns Generation",
             group = "Damage Pattern Generation",
             save_dir = args.result_dir, 
-            name = current_time,
+            name = os.path.basename(args.result_dir),
         )
     
     # training
