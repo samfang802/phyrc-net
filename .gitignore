@@ -41,9 +41,9 @@ Thumbs.db
 .idea/
 
 # Project-specific generated outputs
-# Linux is case-sensitive: `data/` does not ignore `Data/`.
-data/
-Data/
+# Leading slash: only the repo-root folders. `data/` would also hide src/data.
+/data/
+/Data/
 results/
 log/
 cGANckpt/
