@@ -283,6 +283,7 @@ class ADMUNetCFM(nn.Module):
         physics_token_dim=128,
         physics_adagn_dim=None,
         gated_fusion_alpha_dim="scalar",
+        use_delta_g=False,
         image_channels=None,
         self_cond_channels=0,
         use_undamaged_ref=False,
@@ -297,6 +298,8 @@ class ADMUNetCFM(nn.Module):
         super().__init__()
         if use_split_conditioning and use_physics_adagn:
             raise ValueError("use_split_conditioning and use_physics_adagn are mutually exclusive")
+        if use_delta_g and not use_split_conditioning:
+            raise ValueError("use_delta_g requires use_split_conditioning")
         self.model_channels = model_channels
         self.cond_dim = cond_dim
         self.use_damage_mask_condition = bool(use_damage_mask_condition)
@@ -408,6 +411,14 @@ class ADMUNetCFM(nn.Module):
                 self.alpha = nn.Parameter(torch.zeros(cond_dim))
             else:
                 self.alpha = nn.Parameter(torch.zeros(1))
+            self.use_delta_g = bool(use_delta_g)
+            if self.use_delta_g:
+                # h += alpha_dg * Linear(g_t - g_{t-1}). alpha_dg = 0 at init, no norm so the size of the change survives.
+                self.physics_linear_delta = nn.Linear(physics_dim, cond_dim, bias=False)
+                if self.gated_fusion_alpha_dim == "vector":
+                    self.alpha_dg = nn.Parameter(torch.zeros(cond_dim))
+                else:
+                    self.alpha_dg = nn.Parameter(torch.zeros(1))
             if self.use_undamaged_ref:
                 # Independent gate: h = e_c + alpha * e_g + alpha_ref * e_ref
                 # alpha_ref ≡ 0 at init so a loaded Patch ckpt behaves as before.
@@ -568,7 +579,7 @@ class ADMUNetCFM(nn.Module):
         self.out_norm = nn.GroupNorm(_num_groups(ch), ch, eps=1e-6)
         self.out_conv = nn.Conv2d(ch, out_channels, kernel_size=3, padding=1)
 
-    def _build_cond(self, t, c, gru_feat=None, ref_feat=None):
+    def _build_cond(self, t, c, gru_feat=None, ref_feat=None, gru_delta=None):
         t_emb = sinusoidal_timestep_embedding(t, self.model_channels)
         t_emb = self.time_mlp(t_emb)
         if self.use_split_conditioning:
@@ -581,6 +592,8 @@ class ADMUNetCFM(nn.Module):
             e_g = self.e_g_ln(self.physics_linear(gru_feat))
             # Zero-init gated fusion: h_cond = e_c + alpha * e_g
             h = e_c + self.alpha * e_g
+            if getattr(self, "use_delta_g", False) and gru_delta is not None:
+                h = h + self.alpha_dg * self.physics_linear_delta(gru_delta)
             if self.use_undamaged_ref:
                 if ref_feat is None:
                     ref_feat = torch.zeros(
@@ -714,7 +727,7 @@ class ADMUNetCFM(nn.Module):
             state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
         )
 
-    def forward(self, z_t, t, c, gru_feat=None, damage_mask=None, return_attn_map=False, ref_feat=None):
+    def forward(self, z_t, t, c, gru_feat=None, damage_mask=None, return_attn_map=False, ref_feat=None, gru_delta=None):
         """
         Dual-Track OT-CFM U-Net velocity prediction.
 
@@ -725,7 +738,7 @@ class ADMUNetCFM(nn.Module):
         Returns ``final_out`` [B, out_channels, H, W], or ``(final_out, attn_maps)``
         when ``return_attn_map=True``.
         """
-        cond = self._build_cond(t, c, gru_feat=gru_feat, ref_feat=ref_feat)
+        cond = self._build_cond(t, c, gru_feat=gru_feat, ref_feat=ref_feat, gru_delta=gru_delta)
         physics_tokens = self._build_physics_tokens(gru_feat) if self.use_physics_cross_attn else None
         if self.use_damage_mask_condition:
             if damage_mask is None:

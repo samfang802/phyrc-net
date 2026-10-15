@@ -332,6 +332,8 @@ class CFMPatchMixin:
 
 
     def _compose_cascade_sample(self, sampled, lr_cond):
+        if self.use_refiner_residual:
+            return (sampled + lr_cond).clamp(-1.0, 1.0)
         if not self.cascade_predict_residual:
             return sampled
         return (sampled + lr_cond).clamp(-1.0, 1.0)
@@ -356,9 +358,9 @@ class CFMPatchMixin:
                 raise ValueError("self_cond provided but use_self_conditioning=False")
             z_in = z_image
 
-        if self.use_cascade_sr:
+        if self.use_cascade_sr or self.use_refiner_residual:
             if lr_cond is None:
-                raise ValueError("lr_cond is required when use_cascade_sr=True")
+                raise ValueError("lr_cond (state S_{t-1}) is required for cascade SR / refiner residual")
             if lr_cond.shape[1] != z_image.shape[1]:
                 raise ValueError(
                     f"lr_cond channels ({lr_cond.shape[1]}) must match "
@@ -405,6 +407,7 @@ class CFMPatchMixin:
         spall_cond=None,
         return_attn_map=False,
         ref_feat=None,
+        gru_delta=None,
     ):
         model_in = self._build_velocity_net_input(
             z_image, coords=coords, self_cond=self_cond, lr_cond=lr_cond, spall_cond=spall_cond
@@ -419,6 +422,7 @@ class CFMPatchMixin:
             damage_mask=damage_mask,
             return_attn_map=return_attn_map,
             ref_feat=ref_feat,
+            **({"gru_delta": gru_delta} if gru_delta is not None else {}),
         )
         attn_maps = None
         if return_attn_map:

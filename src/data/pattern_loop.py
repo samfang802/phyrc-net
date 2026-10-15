@@ -60,10 +60,19 @@ class PatternLoopDataset(Dataset):
             kwargs.get("use_ar_self_conditioning", False)
         ) or bool(kwargs.get("use_ar_chain_ot", False)) or bool(
             kwargs.get("use_spall_growth_mask", False)
-        ) or bool(kwargs.get("use_paired_bridge", False))
+        ) or bool(kwargs.get("use_paired_bridge", False)) or bool(
+            kwargs.get("use_refiner_residual", False)
+        )
+        # Refiner chain training also needs the frame before the previous one.
+        self.use_prev2 = bool(kwargs.get("use_refiner_residual", False))
         self._prev_iloc = self._build_prev_iloc_map() if self.use_ar_temporal_pairing else None
         self._missing_object_mask = set()
         self.image_size = int(kwargs.get("image_size", 128))
+        self._info_cache = {}
+        self._mask_cache = {}
+        self._img_cache = {}
+        self._prefix_cache = {}
+        self.cache_data = bool(kwargs.get("cache_data", False))
         self.condition_perturb = bool(kwargs.get("condition_perturb", False)) and self.mode == "train"
         self.condition_perturb_dist = str(kwargs.get("condition_perturb_dist", "uniform")).lower()
         perturb_min = float(kwargs.get("condition_perturb_min", 0.01))
@@ -100,7 +109,55 @@ class PatternLoopDataset(Dataset):
                 f"neighbors (delta={self.g_traj_mix_delta}, λ≤{self.g_traj_mix_max_lambda})",
                 flush=True,
             )
+        if self.cache_data:
+            self._preload_cache()
         print("Done!")
+
+    def _preload_cache(self):
+        """Decode every image of this split once. Random augmentation still runs per call."""
+        n_cached = 0
+        use_prefix = hasattr(self.transform, "enable_prefix_cache") and self.transform.enable_prefix_cache()
+        for filename in self.label["filename"].tolist():
+            if filename in self._img_cache or filename in self._prefix_cache:
+                continue
+            image = Image.open(os.path.join(self.root, "DamagePattern", "images", filename))
+            if use_prefix:
+                # Resize, grayscale and CLAHE are deterministic: run them once.
+                self._prefix_cache[filename] = self.transform.precompute(image)
+                n_cached += 1
+                continue
+            if image.mode not in ("RGB", "L", "RGBA"):
+                continue
+            image.load()
+            self._img_cache[filename] = (np.array(image), image.mode)
+            n_cached += 1
+        for exp in self.label["exp"].unique().tolist():
+            self._info_for_exp(exp)
+        if self._needs_object_mask():
+            for filename in self.label["filename"].tolist():
+                self._load_object_mask_tensor(filename, self.image_size)
+        mb = sum(a.nbytes for a, _ in self._img_cache.values()) / 1e6
+        mb += sum(t.numel() * t.element_size() for t in self._prefix_cache.values()) / 1e6
+        print(
+            f"[PatternLoopDataset] cache_data: {n_cached} images "
+            f"({'after resize+grayscale+CLAHE' if use_prefix else 'decoded'}, {mb:.0f} MB), "
+            f"{len(self._mask_cache)} masks, {len(self._info_cache)} info rows",
+            flush=True,
+        )
+
+    def _info_for_exp(self, exp):
+        cached = self._info_cache.get(exp)
+        if cached is None:
+            row = self.info[self.info["id"] == exp].iloc[:, 1:].values.squeeze()
+            cached = torch.FloatTensor(row)
+            self._info_cache[exp] = cached
+        return cached.clone()
+
+    def _open_image(self, filename):
+        cached = self._img_cache.get(filename)
+        if cached is not None:
+            return Image.fromarray(cached[0])
+        return Image.open(os.path.join(self.root, "DamagePattern", "images", filename))
 
     def _build_prev_iloc_map(self):
         """For each row, iloc of previous frame in same (exp, direction), else -1."""
@@ -290,6 +347,11 @@ class PatternLoopDataset(Dataset):
         if not self._needs_object_mask():
             return None
 
+        cache_key = (filename, int(image_size))
+        cached = self._mask_cache.get(cache_key)
+        if cached is not None:
+            return cached.clone()
+
         mask_path = self._resolve_object_mask_path(filename)
         if mask_path is None:
             if filename not in self._missing_object_mask:
@@ -305,8 +367,10 @@ class PatternLoopDataset(Dataset):
                 size=(image_size, image_size),
                 mode="nearest",
             ).squeeze(0)
-        valid_mask = 1.0 - (mask_tensor / 255.0)
-        return valid_mask.clamp_(0.0, 1.0)
+        valid_mask = (1.0 - (mask_tensor / 255.0)).clamp_(0.0, 1.0)
+        if self.cache_data:
+            self._mask_cache[cache_key] = valid_mask.clone()
+        return valid_mask
 
     def _direction_to_tensor(self, direction, flipped=False):
         if direction == "Pull":
@@ -348,9 +412,9 @@ class PatternLoopDataset(Dataset):
 
     def _load_frame(self, filename, exp, direction, timestep, DI, force_flip=None, apply_random_erasing=True):
         """Load one damage frame (image + GRU + masks). Shared flip via force_flip."""
-        image = Image.open(os.path.join(self.root, "DamagePattern", "images", filename))
-        info = self.info[self.info["id"] == exp].iloc[:, 1:].values.squeeze()
-        info = torch.FloatTensor(info)
+        prefixed = self._prefix_cache.get(filename)
+        image = prefixed.clone() if prefixed is not None else self._open_image(filename)
+        info = self._info_for_exp(exp)
         hidden_state = self.hidden_state[exp][int(timestep), :]
         if not torch.is_tensor(hidden_state):
             hidden_state = torch.as_tensor(hidden_state, dtype=torch.float32)
@@ -362,6 +426,7 @@ class PatternLoopDataset(Dataset):
                 object_mask=object_mask,
                 force_flip=force_flip,
                 apply_random_erasing=apply_random_erasing,
+                **({"image_is_prefixed": True} if prefixed is not None else {}),
             )
         except TypeError:
             # Transforms without AR kwargs (legacy call sites).
@@ -473,13 +538,32 @@ class PatternLoopDataset(Dataset):
                 "flipped": target["flipped"],
             }
 
+        prev2 = None
+        has_prev2 = False
+        if self.use_prev2:
+            prev2_idx = int(self._prev_iloc[prev_idx]) if has_prev else -1
+            has_prev2 = prev2_idx >= 0
+            if has_prev2:
+                q_filename, q_exp, q_direction, q_timestep, q_DI = self.label.iloc[prev2_idx, :].values
+                prev2 = self._load_frame(
+                    q_filename,
+                    q_exp,
+                    q_direction,
+                    q_timestep,
+                    q_DI,
+                    force_flip=force_flip,
+                    apply_random_erasing=False,
+                )
+            else:
+                prev2 = prev
+
         ones = torch.ones((1, target["image"].shape[-2], target["image"].shape[-1]), dtype=target["image"].dtype)
         mask_target = target["condition_mask"] if target["condition_mask"] is not None else ones
         mask_prev = prev["condition_mask"] if prev["condition_mask"] is not None else ones
         # Unified damage / object mask for both stage forwards.
         mask_combined = torch.max(mask_prev, mask_target)
 
-        return {
+        out = {
             "image_target": target["image"],
             "image_prev": prev["image"],
             "hidden_state_target": target["hidden_state"],
@@ -507,6 +591,13 @@ class PatternLoopDataset(Dataset):
             "loss_mask": target["loss_mask"],
             "condition_mask": mask_combined,
         }
+        if self.use_prev2:
+            out["image_prev2"] = prev2["image"]
+            out["hidden_state_prev2"] = prev2["hidden_state"]
+            out["direction_prev2"] = prev2["direction"]
+            out["DI_prev2"] = prev2["DI"]
+            out["has_prev2"] = torch.tensor(1.0 if has_prev2 else 0.0, dtype=torch.float32)
+        return out
 
 
     def __len__(self):

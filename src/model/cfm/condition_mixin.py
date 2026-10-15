@@ -180,6 +180,11 @@ class CFMConditionMixin:
                 "DI_prev": batch.get("DI_prev"),
                 "mask_combined": batch.get("mask_combined", condition_mask),
                 "has_prev": batch.get("has_prev"),
+                "image_prev2": batch.get("image_prev2"),
+                "hidden_state_prev2": batch.get("hidden_state_prev2"),
+                "direction_prev2": batch.get("direction_prev2"),
+                "DI_prev2": batch.get("DI_prev2"),
+                "has_prev2": batch.get("has_prev2"),
             }
             return (
                 real_data,

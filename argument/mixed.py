@@ -514,6 +514,73 @@ def add_experiments_arguments(parser):
             help='Training only. Mix this much Gaussian into the real previous frame.',
         )
     parser.add_argument(
+            '--use_refiner_residual',
+            type=lambda x: bool(strtobool(x)),
+            default=False,
+            help=(
+                'Residual temporal refiner. Noise start, S_{t-1} locked as an input channel, '
+                'target x_t - S_{t-1}. S_{t-1} comes from a stop-gradient state track: the frozen '
+                'single-frame model, optionally chained through this network. Needs --refiner_base_checkpoint.'
+            ),
+        )
+    parser.add_argument(
+            '--use_delta_g',
+            type=lambda x: bool(strtobool(x)),
+            default=False,
+            help='Add a zero-gated AdaGN branch on g_t - g_{t-1} (refiner only; needs split conditioning).',
+        )
+    parser.add_argument(
+            '--refiner_chain_prob',
+            type=float,
+            default=0.5,
+            help='Per-batch probability of the two-hop chain (frame t-2 -> this network -> S_{t-1}).',
+        )
+    parser.add_argument(
+            '--refiner_state_noise_max',
+            type=float,
+            default=0.05,
+            help='Training only. Max std of Gaussian noise on the S_{t-1} input channel.',
+        )
+    parser.add_argument(
+            '--refiner_zero_init_out',
+            type=lambda x: bool(strtobool(x)),
+            default=True,
+            help='Refiner warm start: zero the output conv, so the initial velocity is 0 (a noise-start sample then returns its own noise).',
+        )
+    parser.add_argument(
+            '--cache_data',
+            type=lambda x: bool(strtobool(x)),
+            default=False,
+            help='Decode every image, object mask and info row once at dataset build. Augmentation still runs per call.',
+        )
+    parser.add_argument(
+            '--refiner_base_checkpoint',
+            type=str,
+            default='',
+            help=(
+                'Frozen single-frame CFM. With --use_paired_bridge, the bridge start '
+                'S_{t-1} is this model\'s own sample for the previous frame instead of the real photo.'
+            ),
+        )
+    parser.add_argument(
+            '--refiner_base_result_dir',
+            type=str,
+            default='',
+            help='Run dir with args.json for the refiner base (default: parent of its checkpoint).',
+        )
+    parser.add_argument(
+            '--refiner_roll_prob',
+            type=float,
+            default=0.15,
+            help='Per-batch probability that S_{t-1} comes from a full ODE rollout (else one Euler step).',
+        )
+    parser.add_argument(
+            '--refiner_roll_nfe',
+            type=int,
+            default=10,
+            help='Network evaluations of the full rollout (Heun, so steps = nfe // 2).',
+        )
+    parser.add_argument(
             '--use_spall_growth_mask',
             type=lambda x: bool(strtobool(x)),
             default=False,

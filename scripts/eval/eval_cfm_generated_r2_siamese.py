@@ -83,6 +83,12 @@ def _parse_args():
     p.add_argument("--apg_eta", type=float, default=0.0)
     p.add_argument("--apg_norm_threshold", type=float, default=15.0)
     p.add_argument("--apg_momentum", type=float, default=-0.5)
+    p.add_argument("--autoguide_checkpoint", type=str, default="")
+    p.add_argument("--autoguide_result_dir", type=str, default="")
+    p.add_argument("--autoguide_weight", type=float, default=0.0)
+    p.add_argument("--autoguide_eta", type=float, default=1.0, help="beta: weight of the part parallel to v (1=off)")
+    p.add_argument("--autoguide_gamma", type=float, default=0.0, help="w(t)=max(w_min, w*(1-t)^gamma); 0=constant")
+    p.add_argument("--autoguide_w_min", type=float, default=0.0)
     p.add_argument("--repel_prev_scale", type=float, default=0.0)
     p.add_argument("--repel_prev_mode", type=str, default="x1", choices=["x1", "state"])
     return p.parse_args()
@@ -278,6 +284,10 @@ def main():
         tags = []
         if float(cli.apg_guidance_scale) != 0.0:
             tags.append(f"apg{float(cli.apg_guidance_scale):.2f}".replace(".", "p"))
+        if float(cli.autoguide_weight) != 0.0:
+            tags.append(f"ag{float(cli.autoguide_weight):.2f}".replace(".", "p"))
+            if float(cli.autoguide_gamma) != 0.0:
+                tags.append(f"g{float(cli.autoguide_gamma):g}".replace(".", "p"))
         if float(cli.repel_prev_scale) != 0.0:
             tags.append(
                 f"repel{float(cli.repel_prev_scale):.2f}".replace(".", "p")
@@ -368,6 +378,12 @@ def main():
     cfm.apg_eta = float(cli.apg_eta)
     cfm.apg_norm_threshold = float(cli.apg_norm_threshold)
     cfm.apg_momentum = float(cli.apg_momentum)
+    cfm.autoguide_checkpoint = str(cli.autoguide_checkpoint)
+    cfm.autoguide_result_dir = str(cli.autoguide_result_dir)
+    cfm.autoguide_weight = float(cli.autoguide_weight)
+    cfm.autoguide_eta = float(cli.autoguide_eta)
+    cfm.autoguide_gamma = float(cli.autoguide_gamma)
+    cfm.autoguide_w_min = float(cli.autoguide_w_min)
     cfm.repel_prev_scale = float(cli.repel_prev_scale)
     cfm.repel_prev_mode = str(cli.repel_prev_mode).lower()
     if float(cli.apg_guidance_scale) != 0.0:

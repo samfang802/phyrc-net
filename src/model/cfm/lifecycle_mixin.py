@@ -122,6 +122,88 @@ class CFMLifecycleMixin:
         )
 
 
+    def _load_frozen_cfm(self, ckpt, result_dir, reset_attrs):
+        """Build a frozen CFM from ``result_dir/args.json`` and ``ckpt``. Returns (model, status)."""
+        ckpt = os.path.abspath(ckpt)
+        if not os.path.isfile(ckpt):
+            raise FileNotFoundError(f"Frozen CFM checkpoint not found: {ckpt}")
+        result_dir = os.path.abspath(result_dir or os.path.dirname(ckpt))
+        args_path = os.path.join(result_dir, "args.json")
+        if not os.path.isfile(args_path):
+            raise FileNotFoundError(f"Frozen CFM args.json not found: {args_path}")
+        import argparse
+        import importlib
+        import json
+
+        frozen_args = argparse.Namespace(**json.load(open(args_path, "r")))
+        frozen_args.result_dir = result_dir
+        for name, value in reset_attrs.items():
+            setattr(frozen_args, name, value)
+        os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
+        state = torch.load(ckpt, map_location=self.device, weights_only=False)["state_dict"]
+        for k in [k for k in state if str(k).startswith("fid.") or "u2_vss" in str(k)]:
+            del state[k]
+        w = state.get("velocity_net.scalar_mlp.0.weight")
+        if (
+            w is not None
+            and int(w.shape[1]) == 3
+            and bool(getattr(frozen_args, "zero_di_condition", False))
+        ):
+            frozen_args.keep_zero_di_slot = True
+        model = getattr(importlib.import_module("src.model.ImageGeneration"), frozen_args.architecture)(
+            regressor=None, **vars(frozen_args)
+        )
+        status = model.load_state_dict(state, strict=False)
+        model.to(self.device)
+        model.eval()
+        for param in model.parameters():
+            param.requires_grad = False
+        return model, status
+
+
+    def _attach_autoguide(self):
+        """Load the frozen 'bad' CFM for autoguidance. Not an nn.Module child."""
+        if float(getattr(self, "autoguide_weight", 0.0)) == 0.0:
+            return
+        if getattr(self, "_autoguide_ref", None):
+            return
+        ckpt = str(getattr(self, "autoguide_checkpoint", "") or "").strip()
+        if not ckpt:
+            raise ValueError("autoguide_weight != 0 requires --autoguide_checkpoint")
+        bad, status = self._load_frozen_cfm(
+            ckpt,
+            str(getattr(self, "autoguide_result_dir", "") or "").strip(),
+            {"autoguide_weight": 0.0, "autoguide_checkpoint": ""},
+        )
+        self._autoguide_ref = [bad]
+        print(
+            f"[CFM] Autoguide bad model attached (frozen): {os.path.abspath(ckpt)} "
+            f"w={self.autoguide_weight:g} "
+            f"missing={len(status.missing_keys)} unexpected={len(status.unexpected_keys)}",
+            flush=True,
+        )
+
+
+    def _attach_refiner_base(self):
+        """Load the frozen single-frame CFM whose samples stand in for S_{t-1}. Not an nn.Module child."""
+        if getattr(self, "_refiner_base_ref", None):
+            return
+        ckpt = str(getattr(self, "refiner_base_checkpoint", "") or "").strip()
+        if not ckpt:
+            raise ValueError("refiner mode requires --refiner_base_checkpoint")
+        base, status = self._load_frozen_cfm(
+            ckpt,
+            str(getattr(self, "refiner_base_result_dir", "") or "").strip(),
+            {"refiner_base_checkpoint": "", "use_paired_bridge": False},
+        )
+        self._refiner_base_ref = [base]
+        print(
+            f"[CFM] Refiner base attached (frozen): {os.path.abspath(ckpt)} "
+            f"missing={len(status.missing_keys)} unexpected={len(status.unexpected_keys)}",
+            flush=True,
+        )
+
+
     def _encode_to_target_space(self, image_tensor):
         if self.vae is None:
             return image_tensor

@@ -7,6 +7,16 @@ from src.dataset import PatternLoopDataset
 from src.utils import build_damage_image_transform_with_loss_mask
 from argument.argument_mixed import parse_args, check_args, set_dataset_args, save_args
 
+def _worker_init(_worker_id):
+    # One thread per loader worker so a few CPUs are not oversubscribed.
+    torch.set_num_threads(1)
+    try:
+        import cv2
+        cv2.setNumThreads(0)
+    except ImportError:
+        pass
+
+
 def _resolve_num_workers(requested_workers):
     cpu_count = os.cpu_count() or 1
     return max(0, min(requested_workers, cpu_count))
@@ -39,10 +49,83 @@ def _load_state_prefix(module, ckpt_path, prefix):
     )
 
 
+def _expand_refiner_in_conv(old_w, want_shape, image_channels, coord_channels, mask_channels):
+    """Map a single-frame ``in_conv`` onto a refiner.
+
+    Checkpoint layout is ``[image | patch coords | damage mask]``. The refiner inserts
+    zero ``S_{t-1}`` channels after the image. Coord channels that the new net does not
+    use (patch diffusion off) are dropped; the mask channel stays last.
+    """
+    if tuple(old_w.shape) == tuple(want_shape):
+        return old_w
+    c = int(image_channels)
+    mask_ch = int(mask_channels)
+    coord_keep = int(coord_channels)
+    if old_w.ndim != 4 or old_w.shape[0] != want_shape[0] or old_w.shape[2:] != want_shape[2:]:
+        raise ValueError(f"in_conv {tuple(old_w.shape)} cannot be expanded to {tuple(want_shape)}")
+    if mask_ch and old_w.shape[1] > c:
+        core, mask_w = old_w[:, :-mask_ch], old_w[:, -mask_ch:]
+    else:
+        core, mask_w = old_w, old_w[:, :0]
+    if core.shape[1] < c:
+        raise ValueError(f"in_conv {tuple(old_w.shape)} cannot be expanded to {tuple(want_shape)}")
+    tail = core[:, c:]
+    if tail.shape[1] < coord_keep:
+        raise ValueError(f"in_conv {tuple(old_w.shape)} cannot be expanded to {tuple(want_shape)}")
+    tail = tail[:, :coord_keep]
+    zeros = torch.zeros(old_w.shape[0], c, *old_w.shape[2:], dtype=old_w.dtype)
+    new_w = torch.cat([core[:, :c], zeros, tail, mask_w], dim=1)
+    if tuple(new_w.shape) != tuple(want_shape):
+        raise ValueError(f"in_conv {tuple(old_w.shape)} cannot be expanded to {tuple(want_shape)}")
+    return new_w
+
+
+def _load_velocity_init_with_state_channels(model, ckpt_path, zero_out=True):
+    """Warm start a refiner from a single-frame checkpoint. The new S_{t-1} input channels
+    sit right after the image channels in ``in_conv`` and start at zero."""
+    os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
+    torch.serialization.add_safe_globals([np._core.multiarray.scalar])
+    payload = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    state = payload.get("state_dict", payload)
+    prefix = "velocity_net."
+    sub = {key[len(prefix):]: value for key, value in state.items() if key.startswith(prefix)}
+    c = int(model.model_in_channels)
+    old_w = sub["in_conv.weight"]
+    want = model.velocity_net.in_conv.weight
+    mask_ch = 1 if bool(getattr(model, "use_damage_mask_condition", False)) else 0
+    sub["in_conv.weight"] = _expand_refiner_in_conv(
+        old_w,
+        tuple(want.shape),
+        c,
+        int(getattr(model, "coord_channels", 0)),
+        mask_ch,
+    )
+    missing, unexpected = model.velocity_net.load_state_dict(sub, strict=False)
+    stray = [k for k in missing if "physics_linear_delta" not in k and "alpha_dg" not in k]
+    if stray or unexpected:
+        raise KeyError(f"warm start mismatch: missing={stray} unexpected={list(unexpected)}")
+    print(
+        f"[train_mixed] Loaded velocity_net with {c} zero-init state channels from {ckpt_path} "
+        f"tensors={len(sub)} missing={len(missing)} unexpected={len(unexpected)}",
+        flush=True,
+    )
+    if zero_out:
+        # Velocity starts at 0, so an untrained sample is its own start noise (not a zero residual).
+        with torch.no_grad():
+            model.velocity_net.out_conv.weight.zero_()
+            if model.velocity_net.out_conv.bias is not None:
+                model.velocity_net.out_conv.bias.zero_()
+        print("[train_mixed] Refiner out_conv zero-initialised (initial velocity 0)", flush=True)
+
+
 def _load_spall_g_init(model, args):
     velocity_init = str(getattr(args, "velocity_init", "") or "").strip()
     mask_ckpt = str(getattr(args, "spall_mask_ckpt", "") or "").strip()
-    if velocity_init:
+    if velocity_init and bool(getattr(args, "use_refiner_residual", False)):
+        _load_velocity_init_with_state_channels(
+            model, velocity_init, zero_out=bool(getattr(args, "refiner_zero_init_out", True))
+        )
+    elif velocity_init:
         _load_state_prefix(model.velocity_net, velocity_init, "velocity_net.")
     if mask_ckpt:
         if getattr(model, "spall_mask_head", None) is None:
@@ -354,14 +437,20 @@ if __name__ == "__main__":
     _save_augmented_grid_preview(train_ds, args.result_dir, num_images=100, grid_size=10)
 
     train_batch_size = int(args.batch_size)
+    loader_extra = dict(worker_init_fn=_worker_init, pin_memory=torch.cuda.is_available())
     train_dataloader = DataLoader(
         train_ds,
         batch_size=train_batch_size,
         shuffle=True,
         num_workers=num_workers,
         drop_last=True,
+        persistent_workers=num_workers > 0,
+        **({"prefetch_factor": 4} if num_workers > 0 else {}),
+        **loader_extra,
     )
-    val_dataloader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=num_workers)
+    val_dataloader = DataLoader(
+        val_ds, batch_size=args.batch_size, shuffle=False, num_workers=num_workers, **loader_extra
+    )
     
     # Load regressor (only required when DI auxiliary loss is enabled)
     regressor = None

@@ -441,7 +441,31 @@ class MaskedDamageImageTransform:
         ] = 0.0
         return target_image, loss_mask
 
-    def __call__(self, image, object_mask=None, force_flip=None, apply_random_erasing=True):
+    def enable_prefix_cache(self):
+        """Split the pipeline into a deterministic head (resize, grayscale, CLAHE) and the rest.
+
+        ``precompute`` runs the head once; ``__call__(..., image_is_prefixed=True)`` then runs
+        only the random augmentation and dtype conversion. Returns False if it cannot split.
+        """
+        ops = list(getattr(self.image_transform, "transforms", []))
+        n = 0
+        for op in ops:
+            if type(op).__name__ in ("Resize", "ToImage", "Grayscale", "ApplyCLAHE"):
+                n += 1
+            else:
+                break
+        if n == 0 or n == len(ops):
+            return False
+        self._prefix = v2.Compose(ops[:n])
+        self._tail = v2.Compose(ops[n:])
+        return True
+
+    def precompute(self, image):
+        return self._prefix(image)
+
+    def __call__(
+        self, image, object_mask=None, force_flip=None, apply_random_erasing=True, image_is_prefixed=False
+    ):
         """Transform one image.
 
         Args:
@@ -449,7 +473,7 @@ class MaskedDamageImageTransform:
                 Used for AR prev/target pairs so both frames share the same flip.
             apply_random_erasing: When False, skip random erasing (typical for prev frames).
         """
-        target_image = self.image_transform(image)
+        target_image = self._tail(image) if image_is_prefixed else self.image_transform(image)
         if target_image.ndim != 3:
             raise ValueError(
                 "MaskedDamageImageTransform expects a CHW image tensor; "
