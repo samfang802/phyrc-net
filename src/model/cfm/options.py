@@ -393,6 +393,59 @@ def bind_cfm_options(
     self.apg_eta = float(kwargs.get("apg_eta", 0.0))
     self.apg_norm_threshold = float(kwargs.get("apg_norm_threshold", 15.0))
     self.apg_momentum = float(kwargs.get("apg_momentum", -0.5))
+    self.coord_g0 = str(kwargs.get("coord_g0", "") or "").lower()
+    if self.coord_g0 not in ("", "zero", "undamaged"):
+        raise ValueError(f"coord_g0 must be '', 'zero' or 'undamaged', got {self.coord_g0!r}")
+    self.apg_g0 = str(kwargs.get("apg_g0", "") or "").lower()
+    if self.apg_g0 not in ("", "zero", "undamaged"):
+        raise ValueError(f"apg_g0 must be '', 'zero' or 'undamaged', got {self.apg_g0!r}")
+    self.autoguide_checkpoint = str(kwargs.get("autoguide_checkpoint", "") or "").strip()
+    self.autoguide_result_dir = str(kwargs.get("autoguide_result_dir", "") or "").strip()
+    self.autoguide_weight = float(kwargs.get("autoguide_weight", 0.0))
+    self.autoguide_eta = float(kwargs.get("autoguide_eta", 1.0))
+    self.autoguide_gamma = float(kwargs.get("autoguide_gamma", 0.0))
+    self.autoguide_w_min = float(kwargs.get("autoguide_w_min", 0.0))
+    self.autoguide_wl = float(kwargs.get("autoguide_wl", 1.0))
+    self.autoguide_wh = float(kwargs.get("autoguide_wh", 1.0))
+    self._autoguide_ref = []
+    self.use_delta_g = bool(kwargs.get("use_delta_g", False))
+    self.use_refiner_residual = bool(kwargs.get("use_refiner_residual", False))
+    self.refiner_chain_prob = float(kwargs.get("refiner_chain_prob", 0.5))
+    self.refiner_state_noise_max = float(kwargs.get("refiner_state_noise_max", 0.05))
+    if not (0.0 <= self.refiner_chain_prob <= 1.0):
+        raise ValueError(f"refiner_chain_prob must be in [0, 1], got {self.refiner_chain_prob}")
+    if self.refiner_state_noise_max < 0.0:
+        raise ValueError(
+            f"refiner_state_noise_max must be >= 0, got {self.refiner_state_noise_max}"
+        )
+    self.refiner_base_checkpoint = str(kwargs.get("refiner_base_checkpoint", "") or "").strip()
+    self.refiner_base_result_dir = str(kwargs.get("refiner_base_result_dir", "") or "").strip()
+    self.refiner_roll_prob = float(kwargs.get("refiner_roll_prob", 0.15))
+    self.refiner_roll_nfe = int(kwargs.get("refiner_roll_nfe", 10))
+    if not (0.0 <= self.refiner_roll_prob <= 1.0):
+        raise ValueError(f"refiner_roll_prob must be in [0, 1], got {self.refiner_roll_prob}")
+    if self.refiner_roll_nfe < 2:
+        raise ValueError(f"refiner_roll_nfe must be >= 2, got {self.refiner_roll_nfe}")
+    if self.refiner_base_checkpoint and not (self.use_paired_bridge or self.use_refiner_residual):
+        raise ValueError(
+            "--refiner_base_checkpoint requires --use_paired_bridge or --use_refiner_residual"
+        )
+    if self.use_refiner_residual:
+        if not self.refiner_base_checkpoint:
+            raise ValueError("--use_refiner_residual requires --refiner_base_checkpoint")
+        if (
+            self.use_paired_bridge
+            or self.use_spall_growth_mask
+            or self.use_ar_chain_ot
+            or self.use_ar_self_conditioning
+            or self.use_self_conditioning
+            or self.use_cascade_sr
+        ):
+            raise ValueError(
+                "use_refiner_residual cannot be combined with paired bridge, spall, AR, "
+                "self-conditioning, or cascade SR"
+            )
+    self._refiner_base_ref = []
     self.repel_prev_scale = float(kwargs.get("repel_prev_scale", 0.0))
     self.repel_prev_mode = str(kwargs.get("repel_prev_mode", "x1")).lower()
     if self.repel_prev_mode not in ("x1", "state"):
@@ -507,7 +560,7 @@ def bind_cfm_options(
     net_in_channels = (
         self.model_in_channels
         + (self.model_in_channels if self.use_self_conditioning else 0)
-        + (self.model_in_channels if self.use_cascade_sr else 0)
+        + (self.model_in_channels if (self.use_cascade_sr or self.use_refiner_residual) else 0)
         + self.coord_channels
         + (2 if self.use_spall_growth_mask else 0)
     )
@@ -547,6 +600,7 @@ def bind_cfm_options(
         physics_token_dim=self.cfm_physics_token_dim,
         physics_adagn_dim=self.cfm_physics_adagn_dim,
         gated_fusion_alpha_dim=self.gated_fusion_alpha_dim,
+        **({"use_delta_g": True} if self.use_delta_g else {}),
         image_channels=self.model_in_channels,
         self_cond_channels=(self.model_in_channels if self.use_self_conditioning else 0),
         use_undamaged_ref=self.use_undamaged_ref,

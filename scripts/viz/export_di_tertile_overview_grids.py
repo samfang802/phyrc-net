@@ -7,6 +7,7 @@ import argparse
 import importlib
 import json
 import os
+import re
 import sys
 
 import matplotlib.pyplot as plt
@@ -228,6 +229,24 @@ def _parse_args():
     p.add_argument("--apg_norm_threshold", type=float, default=15.0)
     p.add_argument("--apg_momentum", type=float, default=-0.5)
     p.add_argument(
+        "--coord_g0",
+        type=str,
+        default="",
+        choices=["", "zero", "undamaged"],
+        help="Coord/high-pass guide on (v_cond, v_g0) instead of the coord on/off pair. "
+        "undamaged = lowest-DI frame of the same column and direction. Needs --coord_guidance_scale.",
+    )
+    p.add_argument(
+        "--apg_g0",
+        type=str,
+        default="",
+        choices=["", "zero", "undamaged"],
+        help="APG on (v_cond, v_g0) instead of the coord on/off pair. zero = g set to 0; "
+        "undamaged = lowest-DI frame of the same column and direction. Needs --apg_guidance_scale. "
+        "With --facfg_wl/--facfg_wh the band weights replace s: v = v_c + (wl-1) d_low + (wh-1) d_high "
+        "on the APG-processed difference.",
+    )
+    p.add_argument(
         "--repel_prev_scale",
         type=float,
         default=0.0,
@@ -294,6 +313,29 @@ def _parse_args():
     p.add_argument("--lowfreq_guide_scale", type=float, default=0.02)
     p.add_argument("--lowfreq_guide_t_min", type=float, default=0.2)
     p.add_argument("--lowfreq_guide_t_max", type=float, default=0.7)
+    p.add_argument(
+        "--autoguide_checkpoint",
+        type=str,
+        default="",
+        help="Frozen weaker CFM. Same g and z_t as the main model.",
+    )
+    p.add_argument("--autoguide_result_dir", type=str, default="")
+    p.add_argument("--autoguide_weight", type=float, default=0.5)
+    p.add_argument(
+        "--autoguide_eta",
+        type=float,
+        default=0.0,
+        help="Weight on the part of (v_strong-v_bad) parallel to v_strong. 0 drops it.",
+    )
+    p.add_argument("--autoguide_gamma", type=float, default=4.0)
+    p.add_argument("--autoguide_w_min", type=float, default=0.0)
+    p.add_argument(
+        "--refiner_gray_state",
+        action="store_true",
+        help="Refiner only: average the 3 channels of every frame before it becomes the next state.",
+    )
+    p.add_argument("--autoguide_wl", type=float, default=1.0, help="FDG weight on low-freq (v-v_bad)")
+    p.add_argument("--autoguide_wh", type=float, default=1.0, help="FDG weight on high-freq (v-v_bad)")
     return p.parse_args()
 
 
@@ -481,6 +523,35 @@ def _sample_mg_trajectory(model, frames):
         return _sample_mg_trajectory_impl(model, frames)
 
 
+@torch.no_grad()
+def _sample_refiner_trajectory_impl(model, frames):
+    """Frame 0 is the frozen base model. Later frames are S_t = clamp(S_{t-1} + residual)."""
+    conds = []
+    gru_feats = []
+    for anchor in frames:
+        hidden_state = anchor["hidden_state"].unsqueeze(0).to(model.device)
+        direction = anchor["direction"].unsqueeze(0).to(model.device)
+        info = anchor["info"].unsqueeze(0).to(model.device)
+        di = torch.tensor([[float(anchor["gt_di"])]], device=model.device, dtype=info.dtype)
+        c, gru_feat = model._unpack_conditions(
+            info, hidden_state, direction, di, exp=anchor.get("exp")
+        )
+        conds.append(c)
+        gru_feats.append(gru_feat)
+    print(
+        f"[tertile] refiner integrating {len(frames)} frames "
+        f"t={int(frames[0]['timestep'])}..{int(frames[-1]['timestep'])}",
+        flush=True,
+    )
+    latents = model.sample_refiner_sequence(conds, gru_feats)
+    out = {}
+    for anchor, z in zip(frames, latents):
+        ts = int(anchor["timestep"])
+        image = model._decode_from_target_space(z)
+        out[ts] = torch.clamp(image * 0.5 + 0.5, 0.0, 1.0)[0].detach().cpu()
+    return out
+
+
 def _sample_bridge_trajectory_impl(model, frames):
     conds = []
     gru_feats = []
@@ -504,6 +575,8 @@ def _sample_bridge_trajectory_impl(model, frames):
 
 
 def _sample_mg_trajectory_impl(model, frames):
+    if bool(getattr(model, "use_refiner_residual", False)):
+        return _sample_refiner_trajectory_impl(model, frames), None
     if bool(getattr(model, "flowedit", False)):
         return _sample_flowedit_trajectory_impl(model, frames)
     if bool(getattr(model, "use_paired_bridge", False)):
@@ -743,6 +816,22 @@ def main():
             f"ckpt={os.path.abspath(corrector_ckpt)}",
             flush=True,
         )
+    ag_ckpt = str(getattr(cli, "autoguide_checkpoint", "") or "").strip()
+    if ag_ckpt:
+        model.autoguide_checkpoint = ag_ckpt
+        model.autoguide_result_dir = str(getattr(cli, "autoguide_result_dir", "") or "").strip()
+        model.autoguide_weight = float(cli.autoguide_weight)
+        model.autoguide_eta = float(cli.autoguide_eta)
+        model.autoguide_gamma = float(cli.autoguide_gamma)
+        model.autoguide_w_min = float(cli.autoguide_w_min)
+        model.autoguide_wl = float(cli.autoguide_wl)
+        model.autoguide_wh = float(cli.autoguide_wh)
+        print(
+            f"[tertile] autoguide w={model.autoguide_weight:g} eta={model.autoguide_eta:g} "
+            f"gamma={model.autoguide_gamma:g} w_min={model.autoguide_w_min:g} "
+            f"bad={os.path.abspath(ag_ckpt)}",
+            flush=True,
+        )
     if bool(getattr(cli, "flowedit", False)):
         model.flowedit = True
         model.flowedit_t_start = float(cli.flowedit_t_start)
@@ -781,7 +870,10 @@ def main():
     model.apg_eta = float(cli.apg_eta)
     model.apg_norm_threshold = float(cli.apg_norm_threshold)
     model.apg_momentum = float(cli.apg_momentum)
+    model.apg_g0 = str(cli.apg_g0)
+    model.coord_g0 = str(cli.coord_g0)
     model.repel_prev_scale = float(cli.repel_prev_scale)
+    model.refiner_gray_state = bool(cli.refiner_gray_state)
     model.repel_prev_mode = str(cli.repel_prev_mode).lower()
     model.use_frecas = bool(cli.use_frecas)
     model.frecas_single_model = bool(cli.frecas_single_model)
@@ -845,9 +937,15 @@ def main():
         print(
             f"[tertile] APG s={float(cli.apg_guidance_scale):g} eta={float(cli.apg_eta):g} "
             f"norm_thr={float(cli.apg_norm_threshold):g} mom={float(cli.apg_momentum):g} "
-            "(v_xy vs coords=0)",
+            + ("(v_xy vs coords=0)" if not cli.apg_g0 else f"(v_cond vs g0={cli.apg_g0})"),
             flush=True,
         )
+    if cli.coord_g0 and float(cli.coord_guidance_scale) == 0.0:
+        raise ValueError("--coord_g0 needs --coord_guidance_scale != 0")
+    if cli.coord_g0 and cli.apg_g0:
+        raise ValueError("use --coord_g0 or --apg_g0, not both")
+    if cli.apg_g0 and float(cli.apg_guidance_scale) == 0.0:
+        raise ValueError("--apg_g0 needs --apg_guidance_scale != 0")
     sag_scale = float(cli.sag_scale)
     if sag_scale != 0.0 and use_sde:
         raise ValueError("SAG is ODE-only; use --sampler ode")
@@ -1054,6 +1152,33 @@ def main():
         rows = []
         mg_cache = {}
         mg_masks = {}
+        refiner_cache = {}
+        use_refiner = bool(getattr(model, "use_refiner_residual", False))
+        if use_refiner:
+            needed = {}
+            for _, anchor in pairs:
+                key = (str(anchor["exp"]), _direction_key(anchor["direction"]))
+                needed[key] = max(needed.get(key, 0), int(anchor["timestep"]))
+            grouped = {}
+            for cand in candidates:
+                key = (str(cand["exp"]), _direction_key(cand["direction"]))
+                if key in needed:
+                    grouped.setdefault(key, []).append(cand)
+            for key, tmax in needed.items():
+                ordered = [
+                    c for c in _ordered_trajectory(grouped.get(key, []))
+                    if int(c["timestep"]) <= tmax
+                ]
+                if not ordered:
+                    raise RuntimeError(
+                        f"no refiner trajectory for exp={key[0]} direction={key[1]}"
+                    )
+                print(
+                    f"[tertile] refiner {key[0]} dir={key[1]} frames={len(ordered)} "
+                    f"t={int(ordered[0]['timestep'])}..{int(ordered[-1]['timestep'])}",
+                    flush=True,
+                )
+                refiner_cache[key] = _sample_refiner_trajectory_impl(model, ordered)
         if want_mg:
             if not bool(getattr(model, "use_spall_growth_mask", False)) and not bool(
                 getattr(model, "flowedit", False)
@@ -1123,13 +1248,19 @@ def main():
             )
         with torch.no_grad():
             for target_di, anchor in tqdm(pairs, desc=f"ode-{g_name}", leave=True):
-                if want_g:
+                if use_refiner:
+                    key = (str(anchor["exp"]), _direction_key(anchor["direction"]))
+                    ts = int(anchor["timestep"])
+                    if ts not in refiner_cache[key]:
+                        raise RuntimeError(f"refiner cache missing {key} t={ts}")
+                    images_g.append(refiner_cache[key][ts])
+                elif want_g:
                     inter = anchor.get("interference_mask")
                     if inter is None:
                         model._lowfreq_interference = None
                     else:
                         model._lowfreq_interference = inter.unsqueeze(0).to(model.device)
-                    if use_facfg:
+                    if use_facfg or cli.apg_g0 == "undamaged" or cli.coord_g0 == "undamaged":
                         g0_anchor = _undamaged_anchor(candidates, anchor)
                         g0 = model.process_physics_condition(
                             g0_anchor["hidden_state"].unsqueeze(0).to(model.device)
@@ -1204,10 +1335,14 @@ def main():
                 mode_suffix += f"_tmin{float(cli.coord_guidance_t_min):.2f}".replace(".", "p")
             if float(cli.coord_guidance_t_max) < 1.0:
                 mode_suffix += f"_tmax{float(cli.coord_guidance_t_max):.2f}".replace(".", "p")
+            if cli.coord_g0:
+                mode_suffix += f"_g0{cli.coord_g0}"
         if float(cli.apg_guidance_scale) != 0.0:
             mode_suffix += f"_apg{float(cli.apg_guidance_scale):.2f}".replace(".", "p")
             if float(cli.apg_eta) == 1.0 and float(cli.apg_norm_threshold) <= 0.0:
                 mode_suffix += "_mom"
+            if cli.apg_g0:
+                mode_suffix += f"_g0{cli.apg_g0}"
         if float(cli.repel_prev_scale) != 0.0:
             mode_suffix += (
                 f"_repel{float(cli.repel_prev_scale):.2f}".replace(".", "p")
@@ -1220,6 +1355,21 @@ def main():
             )
         if str(getattr(cli, "spall_area_guide", "") or "").strip():
             mode_suffix += f"_lfguide{float(cli.lowfreq_guide_scale):.2f}_ifix".replace(".", "p")
+        if str(getattr(cli, "autoguide_checkpoint", "") or "").strip():
+            mode_suffix += f"_ag{float(cli.autoguide_weight):.2f}".replace(".", "p")
+            if float(cli.autoguide_eta) != 1.0:
+                mode_suffix += f"_eta{float(cli.autoguide_eta):.2f}".replace(".", "p")
+            if float(cli.autoguide_gamma) != 0.0:
+                mode_suffix += f"_g{float(cli.autoguide_gamma):.1f}".replace(".", "p")
+            _bad_step = re.search(r"(\d+)", os.path.basename(cli.autoguide_checkpoint))
+            if _bad_step:
+                mode_suffix += f"_bad{int(_bad_step.group(1))}"
+            if float(cli.autoguide_wl) != 1.0 or float(cli.autoguide_wh) != 1.0:
+                mode_suffix += (
+                    f"_fdgL{float(cli.autoguide_wl):.2f}H{float(cli.autoguide_wh):.2f}"
+                ).replace(".", "p")
+        if bool(getattr(model, "use_refiner_residual", False)):
+            mode_suffix += "_refiner" + ("_gray" if bool(cli.refiner_gray_state) else "")
         if bool(getattr(model, "use_cascade_sr", False)):
             mode_suffix += "_cascade"
         if bool(getattr(model, "use_frecas", False)):
@@ -1237,10 +1387,14 @@ def main():
             sampler_tag += f" · coordg γ={float(cli.coord_guidance_scale):g}"
             if float(cli.coord_guidance_hipass_sigma) > 0.0:
                 sampler_tag += f" hpσ={float(cli.coord_guidance_hipass_sigma):g}"
+            if cli.coord_g0:
+                sampler_tag += f" g0={cli.coord_g0}"
         if float(cli.apg_guidance_scale) != 0.0:
             sampler_tag += f" · APG s={float(cli.apg_guidance_scale):g}"
             if float(cli.apg_eta) == 1.0 and float(cli.apg_norm_threshold) <= 0.0:
                 sampler_tag += " mom-only"
+            if cli.apg_g0:
+                sampler_tag += f" g0={cli.apg_g0}"
         if float(cli.repel_prev_scale) != 0.0:
             sampler_tag += (
                 f" · repel γ={float(cli.repel_prev_scale):g} {cli.repel_prev_mode}"
@@ -1251,6 +1405,13 @@ def main():
             )
         if str(getattr(cli, "spall_area_guide", "") or "").strip():
             sampler_tag += f" · LFguide s={float(cli.lowfreq_guide_scale):g}"
+        if str(getattr(cli, "autoguide_checkpoint", "") or "").strip():
+            sampler_tag += (
+                f" · autoguide w={float(cli.autoguide_weight):g} eta={float(cli.autoguide_eta):g}"
+                f" γ={float(cli.autoguide_gamma):g}"
+            )
+        if bool(getattr(model, "use_refiner_residual", False)):
+            sampler_tag += " · residual refiner"
         if bool(getattr(model, "use_cascade_sr", False)):
             sampler_tag += (
                 f" · cascade {getattr(model, 'cascade_lr_size', '?')}→"

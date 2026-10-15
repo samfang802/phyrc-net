@@ -29,7 +29,7 @@ class CFMTrainingMixin:
         condition_mask = self._align_spatial_to_target(condition_mask)
         valid_mask = self._align_spatial_to_target(valid_mask)
         loss_fm = self._flow_matching_loss_for_batch(
-            target_space_data, c, gru_feat, valid_mask, condition_mask, ar_pack
+            target_space_data, c, gru_feat, valid_mask, condition_mask, ar_pack, info=info
         )
         if self.add_DI_loss:
             lr_cond = (
@@ -166,6 +166,21 @@ class CFMTrainingMixin:
                 on_step=True,
                 on_epoch=False,
             )
+        if self.use_refiner_residual:
+            self.log(
+                "train/refiner_chain",
+                float(getattr(self, "_last_refiner_chain", 0.0)),
+                prog_bar=False,
+                on_step=True,
+                on_epoch=False,
+            )
+            self.log(
+                "train/refiner_resid_std",
+                float(getattr(self, "_last_refiner_resid_std", 0.0)),
+                prog_bar=False,
+                on_step=True,
+                on_epoch=False,
+            )
         if self.use_paired_bridge:
             self.log(
                 "train/bridge_frac",
@@ -200,8 +215,26 @@ class CFMTrainingMixin:
 
 
     def _flow_matching_loss_for_batch(
-        self, target_space_data, c, gru_feat, valid_mask, condition_mask, ar_pack
+        self, target_space_data, c, gru_feat, valid_mask, condition_mask, ar_pack, info=None
     ):
+        if self.use_refiner_residual:
+            if ar_pack is None or ar_pack.get("image_prev") is None:
+                raise RuntimeError("use_refiner_residual requires image_prev in the batch")
+            mask_combined = ar_pack.get("mask_combined", condition_mask)
+            mask_combined = self._align_spatial_to_target(mask_combined)
+            if mask_combined is not None and condition_mask is not None:
+                mask_combined = torch.maximum(mask_combined, condition_mask)
+            elif mask_combined is None:
+                mask_combined = condition_mask
+            return self.refiner_residual_flow_matching_loss(
+                target_space_data,
+                ar_pack,
+                info,
+                c,
+                gru_feat_target=gru_feat,
+                valid_mask=valid_mask,
+                mask_combined=mask_combined,
+            )
         if self.use_paired_bridge:
             if ar_pack is None or ar_pack.get("image_prev") is None:
                 raise RuntimeError("use_paired_bridge requires image_prev in the batch")
@@ -212,6 +245,10 @@ class CFMTrainingMixin:
                 mask_combined = torch.maximum(mask_combined, condition_mask)
             elif mask_combined is None:
                 mask_combined = condition_mask
+            if self.refiner_base_checkpoint:
+                base_prev = self._refiner_base_prev_state(ar_pack, info, mask_combined)
+                if base_prev is not None:
+                    z_prev = base_prev
             return self.paired_bridge_flow_matching_loss(
                 target_space_data,
                 z_prev,
@@ -300,7 +337,7 @@ class CFMTrainingMixin:
         condition_mask = self._align_spatial_to_target(condition_mask)
         valid_mask = self._align_spatial_to_target(valid_mask)
         val_fm_loss = self._flow_matching_loss_for_batch(
-            target_space_data, c, gru_feat, valid_mask, condition_mask, ar_pack
+            target_space_data, c, gru_feat, valid_mask, condition_mask, ar_pack, info=info
         )
 
         real_vis = torch.clamp(real_data * 0.5 + 0.5, 0.0, 1.0)
@@ -366,7 +403,7 @@ class CFMTrainingMixin:
                     split="val",
                     anchor_exp=self.inference_val_anchor_exp,
                 )
-            elif self.use_paired_bridge:
+            elif self.use_paired_bridge or self.use_refiner_residual:
                 val_anchors = self._select_bridge_sequence_anchors(
                     val_candidates,
                     split="val",
@@ -391,9 +428,13 @@ class CFMTrainingMixin:
             if self.use_spall_growth_mask:
                 val_items = self._run_spall_sequence_inference(val_anchors)
                 self._save_spall_sequence_panel(val_items, step_num)
-            elif self.use_paired_bridge:
+            elif self.use_paired_bridge or self.use_refiner_residual:
                 val_items = self._run_bridge_sequence_inference(val_anchors)
-                self._save_spall_sequence_panel(val_items, step_num, kind="paired bridge")
+                self._save_spall_sequence_panel(
+                    val_items,
+                    step_num,
+                    kind="refiner residual" if self.use_refiner_residual else "paired bridge",
+                )
             else:
                 val_items = self._run_fixed_di_inference_for_anchors(val_anchors, di_values)
                 self._save_fixed_di_inference_panel([], val_items, di_values, step_num)

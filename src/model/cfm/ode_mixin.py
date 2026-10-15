@@ -10,7 +10,7 @@ from src.model.cfm.attn_mask_guidance import (
     saliency_from_self_attn,
     topk_mask_from_saliency,
 )
-from src.model.apg import MomentumBuffer, apg_guidance
+from src.model.apg import MomentumBuffer, _project_onto, apg_guidance
 
 
 class CFMODEMixin:
@@ -142,10 +142,15 @@ class CFMODEMixin:
             return False
         if bool(getattr(self, "zero_patch_coords", False)):
             return False
-        return (
-            float(getattr(self, "coord_guidance_scale", 0.0)) != 0.0
-            or float(getattr(self, "apg_guidance_scale", 0.0)) != 0.0
+        apg_on_coords = (
+            float(getattr(self, "apg_guidance_scale", 0.0)) != 0.0
+            and not str(getattr(self, "apg_g0", "") or "")
         )
+        coord_on_coords = (
+            float(getattr(self, "coord_guidance_scale", 0.0)) != 0.0
+            and not str(getattr(self, "coord_g0", "") or "")
+        )
+        return coord_on_coords or apg_on_coords
 
     def _apply_coord_guidance(self, z_in, v_xy, predict_fn, t_scalar=None):
         """Same-c coord pair: vanilla ``v_xy + γ(v_xy−v_0)`` or APG on that pair."""
@@ -459,6 +464,7 @@ class CFMODEMixin:
         damage_mask=None,
         spall_prev=None,
         spall_g_prev=None,
+        gru_delta=None,
     ):
         """Heun/Euler OT-CFM ODE sampling with optional training-free reference guidance.
 
@@ -538,7 +544,7 @@ class CFMODEMixin:
                     f"(or broadcast from batch=1)"
                 )
 
-        if self.use_cascade_sr:
+        if self.use_cascade_sr or self.use_refiner_residual:
             lr_cond = self._ensure_cascade_lr_cond(
                 lr_cond,
                 spatial_hw=z.shape[-2:],
@@ -635,6 +641,12 @@ class CFMODEMixin:
         else:
             self._apg_momentum_buffer = None
 
+        autoguide_w = float(getattr(self, "autoguide_weight", 0.0))
+        autoguide_bad = None
+        if autoguide_w != 0.0:
+            self._attach_autoguide()
+            autoguide_bad = self._autoguide_ref[0]
+
         prev_ref = None
         repel_mode = str(getattr(self, "repel_prev_mode", "x1")).lower()
         self._repel_logged = False
@@ -662,6 +674,7 @@ class CFMODEMixin:
                     self_cond=self_cond,
                     lr_cond=lr_cond,
                     spall_cond=spall_cond,
+                    gru_delta=gru_delta,
                 )
                 if capture_attn and mid is not None and hasattr(mid, "store_attn"):
                     mid.store_attn = False
@@ -669,11 +682,115 @@ class CFMODEMixin:
 
             capture_sag = self._sag_enabled(t_scalar)
             v = _predict_at(z_in, capture_attn=capture_sag)
+            if autoguide_w != 0.0:
+                c_bad = c
+                bad_in = int(autoguide_bad.velocity_net.scalar_mlp[0].in_features)
+                if c_bad.shape[1] != bad_in and c_bad.shape[1] == bad_in + 1:
+                    c_bad = c_bad[:, 1:]
+                with torch.no_grad():
+                    v_bad = autoguide_bad._predict_velocity(
+                        z_in,
+                        t_tensor,
+                        c_bad,
+                        coords=coords,
+                        damage_mask=condition_mask,
+                        gru_feat=gru_feat,
+                        self_cond=self_cond,
+                        lr_cond=lr_cond,
+                        spall_cond=spall_cond,
+                        ref_feat=getattr(self, "_undamaged_ref_embed", None),
+                    )
+                diff = v - v_bad
+                ag_wl = float(getattr(self, "autoguide_wl", 1.0))
+                ag_wh = float(getattr(self, "autoguide_wh", 1.0))
+                if ag_wl != 1.0 or ag_wh != 1.0:
+                    d_low, d_high = self._facfg_split(diff)
+                    diff = ag_wl * d_low + ag_wh * d_high
+                eta = float(getattr(self, "autoguide_eta", 1.0))
+                if eta != 1.0:
+                    parallel, orthogonal = _project_onto(diff, v)
+                    diff = orthogonal + eta * parallel
+                gamma = float(getattr(self, "autoguide_gamma", 0.0))
+                w_min = float(getattr(self, "autoguide_w_min", 0.0))
+                w_t = max(w_min, autoguide_w * (1.0 - float(t_scalar)) ** gamma)
+                if not getattr(self, "_autoguide_logged", False):
+                    self._autoguide_logged = True
+                    raw = (v.detach() - v_bad).abs().mean()
+                    print(
+                        f"[autoguide] w_ref={autoguide_w:g} w(t)={w_t:.4g} gamma={gamma:g} "
+                        f"w_min={w_min:g} eta={eta:g} t={float(t_scalar):.3f} "
+                        f"|v_s-v_bad|mean={float(raw):.4g} "
+                        f"|diff|mean={float(diff.detach().abs().mean()):.4g} "
+                        f"|v_s|mean={float(v.detach().abs().mean()):.4g}",
+                        flush=True,
+                    )
+                v = v + w_t * diff
             g0 = getattr(self, "_facfg_gru_unc", None)
-            if g0 is not None and getattr(self, "facfg_wl", None) is not None:
+            apg_g0_on = bool(str(getattr(self, "apg_g0", "") or "")) and (
+                float(getattr(self, "apg_guidance_scale", 0.0)) != 0.0
+            )
+            if g0 is not None and getattr(self, "facfg_wl", None) is not None and not apg_g0_on:
                 v = self._apply_facfg(
                     v, lambda: _predict_at(z_in, capture_attn=False, gru_override=g0)
                 )
+            apg_g0 = str(getattr(self, "apg_g0", "") or "")
+            if apg_g0 and float(getattr(self, "apg_guidance_scale", 0.0)) != 0.0:
+                # APG on (v_cond, v_g0): the "unconditional" branch swaps only g.
+                g_unc = torch.zeros_like(gru_feat) if apg_g0 == "zero" else getattr(self, "_facfg_gru_unc", None)
+                if g_unc is None:
+                    raise RuntimeError("apg_g0=undamaged needs _facfg_gru_unc set per sample")
+                v_unc = _predict_at(z_in, capture_attn=False, gru_override=g_unc)
+                v_cond = v
+                facfg_wl = getattr(self, "facfg_wl", None)
+                facfg_wh = getattr(self, "facfg_wh", None)
+                use_band = facfg_wl is not None and facfg_wh is not None
+                # With guidance_scale=2 apg_guidance returns v_cond + diff', where diff' is
+                # the momentum / norm-clipped / projected difference.
+                v_apg = apg_guidance(
+                    v_cond,
+                    v_unc,
+                    guidance_scale=2.0 if use_band else float(self.apg_guidance_scale),
+                    eta=float(getattr(self, "apg_eta", 0.0)),
+                    norm_threshold=float(getattr(self, "apg_norm_threshold", 0.0)),
+                    momentum_buffer=getattr(self, "_apg_momentum_buffer", None),
+                )
+                if use_band:
+                    # APG + FA-CFG: per-band CFG weight (w - 1) on the processed difference.
+                    d_low, d_high = self._facfg_split(v_apg - v_cond)
+                    v = v_cond + (float(facfg_wl) - 1.0) * d_low + (float(facfg_wh) - 1.0) * d_high
+                else:
+                    v = v_apg
+                if not getattr(self, "_apg_g0_logged", False):
+                    self._apg_g0_logged = True
+                    print(
+                        f"[apg-g0] g0={apg_g0} s={float(self.apg_guidance_scale):g} "
+                        f"bands={'wl=%g wh=%g' % (float(facfg_wl), float(facfg_wh)) if use_band else 'off'} "
+                        f"eta={float(self.apg_eta):g} norm_thr={float(self.apg_norm_threshold):g} "
+                        f"|v_c-v_g0|mean={float((v_cond - v_unc).detach().abs().mean()):.4g} "
+                        f"|v_c|mean={float(v_cond.detach().abs().mean()):.4g}",
+                        flush=True,
+                    )
+            coord_g0 = str(getattr(self, "coord_g0", "") or "")
+            if coord_g0 and float(getattr(self, "coord_guidance_scale", 0.0)) != 0.0:
+                # High-pass guide on (v_cond, v_g0): v += gamma * highpass(v - v_g0).
+                t_lo = float(getattr(self, "coord_guidance_t_min", 0.0))
+                t_hi = float(getattr(self, "coord_guidance_t_max", 1.0))
+                if t_lo <= float(t_scalar) < t_hi:
+                    g_unc = torch.zeros_like(gru_feat) if coord_g0 == "zero" else getattr(self, "_facfg_gru_unc", None)
+                    if g_unc is None:
+                        raise RuntimeError("coord_g0=undamaged needs _facfg_gru_unc set per sample")
+                    v_unc = _predict_at(z_in, capture_attn=False, gru_override=g_unc)
+                    delta = self._highpass_coord_delta(v - v_unc)
+                    if not getattr(self, "_coord_g0_logged", False):
+                        self._coord_g0_logged = True
+                        print(
+                            f"[coordg-g0] g0={coord_g0} gamma={float(self.coord_guidance_scale):g} "
+                            f"hipass_sigma={float(getattr(self, 'coord_guidance_hipass_sigma', 0.0)):g} "
+                            f"t=[{t_lo:g},{t_hi:g}) |delta|mean={float(delta.detach().abs().mean()):.4g} "
+                            f"|v|mean={float(v.detach().abs().mean()):.4g}",
+                            flush=True,
+                        )
+                    v = v + float(self.coord_guidance_scale) * delta
             if use_ref and guidance_mode == "velocity":
                 v = self._blend_velocity_toward_ot_ref(
                     v, z0, z1_ref, guidance_weight
@@ -764,7 +881,7 @@ class CFMODEMixin:
                 self_cond = z1_hat
         if legacy_paste and spall_lock is not None:
             z = spall_lock * z + (1.0 - spall_lock) * spall_prev
-        if self.use_cascade_sr:
+        if self.use_cascade_sr or self.use_refiner_residual:
             z = self._compose_cascade_sample(z, lr_cond)
         return z
 
@@ -877,6 +994,44 @@ class CFMODEMixin:
                     )
             frames.append(x)
             x_prev = x.detach()
+        return frames
+
+    def sample_refiner_sequence(self, conds, gru_feats, num_steps=None, damage_mask=None):
+        """Walk a column. Frame 0 is the frozen single-frame model. Each later frame is drawn
+        from noise with ``S_{t-1}`` locked as an input channel and added outside the network:
+        ``S_t = clamp(S_{t-1} + residual)``.
+        """
+        if len(conds) != len(gru_feats):
+            raise ValueError(
+                f"conds ({len(conds)}) and gru_feats ({len(gru_feats)}) must have the same length"
+            )
+        per_frame_mask = isinstance(damage_mask, (list, tuple))
+        self._attach_refiner_base()
+        base = self._refiner_base_ref[0]
+        frames = []
+        state = None
+        for i, (c, g) in enumerate(zip(conds, gru_feats)):
+            mask_i = damage_mask[i] if per_frame_mask else damage_mask
+            dg = None if i == 0 or not getattr(self, "use_delta_g", False) else g - gru_feats[i - 1]
+            if state is None:
+                c_base = c
+                base_in = int(base.velocity_net.scalar_mlp[0].in_features)
+                if c.shape[1] + 1 == base_in:
+                    c_base = torch.cat([torch.zeros_like(c[:, :1]), c], dim=1)
+                x = base.sample_with_ode(c_base, gru_feat=g, num_steps=num_steps, damage_mask=mask_i)
+            else:
+                x = self.sample_with_ode(
+                    c,
+                    gru_feat=g,
+                    num_steps=num_steps,
+                    damage_mask=mask_i,
+                    lr_cond=state,
+                    gru_delta=dg,
+                )
+            if getattr(self, "refiner_gray_state", False):
+                x = x.mean(dim=1, keepdim=True).expand_as(x).contiguous()
+            frames.append(x)
+            state = x.detach()
         return frames
 
     def _bridge_correct_frame(
@@ -1080,8 +1235,8 @@ class CFMODEMixin:
         Score from the interpolant: ``z0_hat=z-t v``, ``∇log p≈-z0_hat/(1-t)^2``.
         Diffusion ``g(t)=σ(1-t)``; last ``ode_tail`` of time is pure ODE so grain dies.
         """
-        if self.use_cascade_sr:
-            raise ValueError("sample_with_sde is not supported with use_cascade_sr")
+        if self.use_cascade_sr or self.use_refiner_residual:
+            raise ValueError("sample_with_sde is not supported with use_cascade_sr / refiner residual")
         if lr_cond is not None:
             raise ValueError("sample_with_sde does not take lr_cond")
         if num_steps is None:

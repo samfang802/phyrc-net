@@ -50,7 +50,11 @@ class CFMInferenceMixin:
 
     def _inference_candidate_cap(self):
         # The growth sequence needs every val frame of one column, not a DI sample.
-        if getattr(self, "use_spall_growth_mask", False) or getattr(self, "use_paired_bridge", False):
+        if (
+            getattr(self, "use_spall_growth_mask", False)
+            or getattr(self, "use_paired_bridge", False)
+            or getattr(self, "use_refiner_residual", False)
+        ):
             return 100000
         return max(32, int(self.inference_num_images) * 24)
 
@@ -410,7 +414,10 @@ class CFMInferenceMixin:
             masks.append(damage_mask)
 
         with torch.no_grad():
-            frames = self.sample_paired_bridge_sequence(conds, gru_feats, damage_mask=masks)
+            if getattr(self, "use_refiner_residual", False):
+                frames = self.sample_refiner_sequence(conds, gru_feats, damage_mask=masks)
+            else:
+                frames = self.sample_paired_bridge_sequence(conds, gru_feats, damage_mask=masks)
 
         items = []
         for anchor, frame in zip(anchors, frames):

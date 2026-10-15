@@ -46,8 +46,8 @@ COND_PERTURB_MAX=0.03
 CONDITION_MODE=split
 ZERO_DI_CONDITION=True
 CFG_G_DROP_PROB=0.0
-USE_SPALL_GROWTH_MASK="${USE_SPALL_GROWTH_MASK:-True}"
-# G from scratch. M is the frozen 2000-step extent head.
+USE_SPALL_GROWTH_MASK="${USE_SPALL_GROWTH_MASK:-False}"
+# Single-frame G. M stays off unless USE_SPALL_GROWTH_MASK=True.
 # SPALL_SOFT_PAINT=True: feathered paint weight, same path in train and ODE.
 # SPALL_COND_PROB=True is the full-sigmoid ablation and cannot be combined with it.
 # Mask-only retrains stop at 2000 steps.

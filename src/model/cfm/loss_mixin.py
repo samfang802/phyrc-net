@@ -187,6 +187,171 @@ class CFMLossMixin:
         return p0 + (p1 - p0) * (float(step) / float(end))
 
 
+    def _refiner_draw_full(self):
+        """One full ``refiner_roll_nfe`` rollout with prob ``refiner_roll_prob`` (always in eval)."""
+        return (not self.training) or (
+            float(torch.rand(1).item()) < float(self.refiner_roll_prob)
+        )
+
+
+    @torch.no_grad()
+    def _refiner_base_sample(self, info, hs, dr, di, mask, full):
+        """Frozen single-frame model sample for the frame described by (hs, dr, di)."""
+        self._attach_refiner_base()
+        base = self._refiner_base_ref[0]
+        c_b, g_b = base._unpack_conditions(info, hs, dr, di)
+        solver = base.cfm_solver
+        try:
+            base.cfm_solver = "heun" if full else "euler"
+            steps = max(1, int(self.refiner_roll_nfe) // 2) if full else 1
+            return base.sample_with_ode(c_b, gru_feat=g_b, num_steps=steps, damage_mask=mask)
+        finally:
+            base.cfm_solver = solver
+
+
+    @torch.no_grad()
+    def _refiner_state_step(self, state, c, g, mask, full, gru_delta=None):
+        """State track: this network from noise, ``state`` locked, returns ``clamp(state + residual)``."""
+        solver = self.cfm_solver
+        try:
+            self.cfm_solver = "heun" if full else "euler"
+            steps = max(1, int(self.refiner_roll_nfe) // 2) if full else 1
+            return self.sample_with_ode(
+                c, gru_feat=g, num_steps=steps, damage_mask=mask, lr_cond=state, gru_delta=gru_delta
+            )
+        finally:
+            self.cfm_solver = solver
+
+
+    @torch.no_grad()
+    def _refiner_base_prev_state(self, ar_pack, info, mask_combined):
+        """S_{t-1} as the frozen single-frame model would produce it, not the real photo.
+
+        Returns None if the batch carries no previous-frame conditions.
+        """
+        hs = ar_pack.get("hidden_state_prev")
+        dr = ar_pack.get("direction_prev")
+        di = ar_pack.get("DI_prev")
+        if hs is None or dr is None or di is None:
+            return None
+        full = self._refiner_draw_full()
+        self._last_refiner_full_rollout = float(full)
+        return self._refiner_base_sample(info, hs, dr, di, mask_combined, full)
+
+
+    def refiner_residual_flow_matching_loss(
+        self,
+        z_target,
+        ar_pack,
+        info,
+        c_target,
+        gru_feat_target=None,
+        valid_mask=None,
+        mask_combined=None,
+    ):
+        """Residual refiner with a locked state channel and a stop-gradient state track.
+
+        State track (no grad): build ``S_{t-1}``. Single hop uses the frozen single-frame
+        model for frame t-1. Chain (prob ``refiner_chain_prob``) draws frame t-2 from that
+        model, then lets this network produce ``S_{t-1}`` from it, so the state carries the
+        refiner's own error. One Euler step usually, a ``refiner_roll_nfe`` Heun rollout with
+        prob ``refiner_roll_prob``.
+
+        Loss track: noise ``x0``, target residual ``r = x_t - S_{t-1}``,
+        ``z_τ = (1-τ) x0 + τ r``, ``v = r - x0``, with ``S_{t-1}`` as an input channel.
+        """
+        b = z_target.shape[0]
+        device = z_target.device
+        dtype = z_target.dtype
+
+        def _flag(key):
+            v = ar_pack.get(key)
+            if v is None:
+                return torch.zeros(b, dtype=torch.bool, device=device)
+            return v.reshape(b).to(device=device) >= 0.5
+
+        has_prev = _flag("has_prev")
+        has_prev2 = _flag("has_prev2") & has_prev
+        hs1, dr1, di1 = (
+            ar_pack["hidden_state_prev"],
+            ar_pack["direction_prev"],
+            ar_pack["DI_prev"],
+        )
+        use_chain = (not self.training) or (
+            float(torch.rand(1).item()) < float(self.refiner_chain_prob)
+        )
+        chain_ok = use_chain and ar_pack.get("hidden_state_prev2") is not None
+        self._last_refiner_chain = float(chain_ok)
+
+        with torch.no_grad():
+            if chain_ok:
+                def _pick(a2, a1):
+                    return torch.where(has_prev2.view(b, *([1] * (a1.ndim - 1))), a2, a1)
+
+                hs0 = _pick(ar_pack["hidden_state_prev2"], hs1)
+                dr0 = _pick(ar_pack["direction_prev2"], dr1)
+                di0 = _pick(ar_pack["DI_prev2"], di1)
+                s0 = self._refiner_base_sample(
+                    info, hs0, dr0, di0, mask_combined, self._refiner_draw_full()
+                )
+                c1, g1 = self._unpack_conditions(info, hs1, dr1, di1)
+                dg_hop = None
+                if self.use_delta_g:
+                    dg_hop = g1 - self.process_physics_condition(hs0)
+                s1 = self._refiner_state_step(
+                    s0, c1, g1, mask_combined, self._refiner_draw_full(), gru_delta=dg_hop
+                )
+                s_in = torch.where(has_prev2.view(b, 1, 1, 1), s1, s0)
+            else:
+                s_in = self._refiner_base_sample(
+                    info, hs1, dr1, di1, mask_combined, self._refiner_draw_full()
+                )
+            s_in = s_in.to(dtype=dtype)
+
+        noise_max = float(self.refiner_state_noise_max) if self.training else 0.0
+        state_std = torch.rand(b, device=device, dtype=dtype) * noise_max
+        s_cond = s_in + state_std.view(b, 1, 1, 1) * torch.randn_like(s_in)
+
+        resid = z_target - s_in
+        z0 = torch.randn_like(resid)
+        t = torch.rand(b, device=device, dtype=dtype).clamp(min=1e-5, max=1.0 - 1e-5)
+        coords = None
+        if self.use_patch_diffusion:
+            resid, valid_mask, coords, mask_combined, z0, s_cond = self._apply_patch_crop(
+                resid,
+                valid_mask=valid_mask,
+                condition_mask=mask_combined,
+                z0=z0,
+                z_aux=s_cond,
+                flow_t=t,
+            )
+        t_ = t.view(b, 1, 1, 1)
+        zt = (1.0 - t_) * z0 + t_ * resid
+        target_u = resid - z0
+
+        dg_target = None
+        if self.use_delta_g:
+            dg_target = gru_feat_target - self.process_physics_condition(hs1)
+        v_pred = self._predict_velocity(
+            zt,
+            t,
+            c_target,
+            coords=coords,
+            damage_mask=mask_combined,
+            gru_feat=gru_feat_target,
+            lr_cond=s_cond,
+            gru_delta=dg_target,
+        )
+        per_sample_loss = self._cfm_mse(v_pred, target_u, valid_mask=valid_mask)
+        if self.use_velocity_min_snr_weighting:
+            per_sample_loss = per_sample_loss * self._compute_velocity_min_snr_weight(t).to(
+                per_sample_loss.dtype
+            )
+        weight = has_prev.to(per_sample_loss.dtype)
+        self._last_refiner_resid_std = float(resid.detach().std())
+        return (per_sample_loss * weight).sum() / weight.sum().clamp_min(1.0)
+
+
     def paired_bridge_flow_matching_loss(
         self,
         z_target,
