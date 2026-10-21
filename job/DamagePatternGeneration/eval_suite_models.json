@@ -1,0 +1,24 @@
+{
+  "out_dir": "results/eval_suite/main",
+  "splits": ["test", "val"],
+  "k": 8,
+  "baseline": "gn",
+  "dino_model": "facebook/dinov3-vits16-pretrain-lvd1689m",
+  "extra_dino_models": ["facebook/dinov2-small"],
+  "models": [
+    {"name": "gn",
+     "result_dir": "results/DamagePatternGeneration/CFMADM/1024-dadaGNsplit",
+     "checkpoint": "results/DamagePatternGeneration/CFMADM/1024-dadaGNsplit/Opensees Based damage Patterns Generation/chjqbp9m/checkpoints/last.ckpt"},
+    {"name": "v9",
+     "result_dir": "results/DamagePatternGeneration/CFMADM/selfcondnoDI",
+     "checkpoint": "results/DamagePatternGeneration/CFMADM/selfcondnoDI/Opensees Based damage Patterns Generation/vq9dirur/checkpoints/last.ckpt"},
+    {"name": "gn_shared", "shared_noise": true,
+     "result_dir": "results/DamagePatternGeneration/CFMADM/1024-dadaGNsplit",
+     "checkpoint": "results/DamagePatternGeneration/CFMADM/1024-dadaGNsplit/Opensees Based damage Patterns Generation/chjqbp9m/checkpoints/last.ckpt"},
+    {"name": "refiner",
+     "result_dir": "results/DamagePatternGeneration/CFMADM/2026-10-13_03-02-40_refiner_res_15k",
+     "checkpoint": "results/DamagePatternGeneration/CFMADM/2026-10-13_03-02-40_refiner_res_15k/Opensees Based damage Patterns Generation/tlpg4q5l/checkpoints/last.ckpt"},
+    {"name": "cgan",
+     "images": {"test": {"dir": "cGANckpt/CTR1", "suffix": "_test.jpg"}}}
+  ]
+}

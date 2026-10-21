@@ -153,8 +153,21 @@ class CFMConditionMixin:
         return gru_feat * keep.view(b, *([1] * (gru_feat.ndim - 1)))
 
 
+    def _maybe_oracle_hidden_state(self, real_data, hidden_state):
+        """oracle_dino: replace GRU g with the DINOv3 embedding of the GT frame."""
+        encoder = getattr(self, "_oracle_dino_encoder", None)
+        if encoder is None:
+            return hidden_state
+        feat = encoder.embed(real_data.to(self.device), training=bool(self.training))
+        return feat.to(device=hidden_state.device, dtype=hidden_state.dtype)
+
     def _unpack_generation_batch(self, batch):
         """Unpack tuple (legacy) or AR dict batch into a common namespace."""
+        packed = self._unpack_generation_batch_raw(batch)
+        hidden_state = self._maybe_oracle_hidden_state(packed[0], packed[1])
+        return (packed[0], hidden_state) + tuple(packed[2:])
+
+    def _unpack_generation_batch_raw(self, batch):
         if isinstance(batch, dict):
             real_data = batch["image_target"] if "image_target" in batch else batch["image"]
             hidden_state = batch.get("hidden_state_target", batch["hidden_state"])

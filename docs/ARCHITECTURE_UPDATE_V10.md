@@ -77,8 +77,8 @@ Defaults are no-ops: `wl = wh = eta = 1`, `gamma = 0`, `w_min = 0`. With only `a
 
 ### Jobs and outputs
 
-- Bad model: `job/DamagePatternGeneration/train_ADMCFM_autoguide_bad.sh` (16 channels, `num_res_blocks=1`, dropout 0.1, checkpoints every 1000 steps). The first recipe was about 3000 steps; the script now sets `MAX_STEPS=6000`. Checkpoints of run `2026-10-12_03-59-39_autoguide_bad` at step 3000 and 6000 have both been used.
-- 6x6 High-DI grids: `job/DamagePatternGeneration/viz_high_autoguide_fdg.sh`. It runs three variants (no guidance, autoguidance, autoguidance + FDG with `wh=0.5`). Choose the bad checkpoint with `-v BAD_STEP=003000` or `006000`.
+- Bad model: `train_ADMCFM.sh` with overrides — `qsub -v CFM_MODEL_CHANNELS=16,MAX_STEPS=6000,EARLY_STOP_PATIENCE=3000,CHECKPOINT_EVERY_N_STEPS=1000,CHECKPOINT_START_STEP=1000,RESUME_CKPT=none,RUN_TAG=autoguide_bad job/DamagePatternGeneration/train_ADMCFM.sh` (the separate `train_ADMCFM_autoguide_bad.sh` was merged into it; last version in git `80f71fa`) (16 channels, `num_res_blocks=1`, dropout 0.1, checkpoints every 1000 steps). The first recipe was about 3000 steps; the script now sets `MAX_STEPS=6000`. Checkpoints of run `2026-10-12_03-59-39_autoguide_bad` at step 3000 and 6000 have both been used.
+- 6x6 High-DI grids: `qsub -v MODE=autoguide_fdg job/DamagePatternGeneration/viz_high_di_grid.sh`. It runs three variants (no guidance, autoguidance, autoguidance + FDG with `wh=0.5`). Choose the bad checkpoint with `-v BAD_STEP=003000` or `006000`.
 - Output names carry `_ag..`, `_g..`, `_fdgL..H..` and `_bad<step>` suffixes. Files made before the `_bad` suffix existed do not record which bad checkpoint they used.
 - `results/.../1024-dadaGNsplit/inference_samples/` is grouped into `autoguide/`, `other_guidance/`, `flowedit_sdedit/` and `baseline_6x6/`. The JSON files and `fixed_di_*.png` stay at the top level because scripts read and write them there (the High-DI JSON locks the cell order).
 
@@ -174,7 +174,7 @@ v      = x_target - x0
 - `S_prev`: with probability `1 - refiner_roll_prob` (0.85) per batch, one Euler step from noise; with probability `refiner_roll_prob` (0.15), a `refiner_roll_nfe` (10) evaluation Heun rollout, which is 5 Heun steps. In evaluation it is always the full rollout and `s = 0`.
 - Warm start from the same checkpoint through `VELOCITY_INIT`.
 - Code: `_refiner_base_prev_state` in `loss_mixin.py`; the paired-bridge branch of `_flow_matching_loss_for_batch` in `training_mixin.py` swaps in the base sample when `refiner_base_checkpoint` is set.
-- Job: `job/DamagePatternGeneration/train_ADMCFM_refiner.sh`. Sampling uses the existing `sample_paired_bridge_sequence` unchanged.
+- Job: `job/DamagePatternGeneration/train_ADMCFM_refiner.sh` (removed with the job cleanup; `git show 80f71fa:job/DamagePatternGeneration/train_ADMCFM_refiner.sh`). Sampling uses the existing `sample_paired_bridge_sequence` unchanged.
 - Run history: job `56082` (GPU 5) was stopped at step 1195 and resumed from a saved Lightning checkpoint as job `56083` on GPU 0, which reached 3000 steps. Weights: `results/DamagePatternGeneration/CFMADM/2026-10-12_23-13-34_refiner/checkpoint_step_003000.pt`. This is the control for variant B.
 - Weakness: the bridge integrates from `S_prev`, so the previous frame's brightness is inherited along the path (see 3.6).
 

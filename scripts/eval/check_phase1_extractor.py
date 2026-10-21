@@ -33,7 +33,7 @@ DEFAULT_CANDIDATES = [
     "results/HystereticPrediction/HystereticGRU/2025-08-01_13-28-08",
 ]
 
-# Author train_GRU.sh defaults (used when ckpt has no hyper_parameters)
+# job/HysteresisPrediction/train_hysteresis.sh defaults (formerly train_GRU.sh) (used when ckpt has no hyper_parameters)
 AUTHOR_DEFAULTS = {
     "architecture": "HystereticGRU",
     "hidden_state_dim": 512,

@@ -58,3 +58,5 @@ third_party/PlotNeuralNet/
 job.sh
 draw.ipynb
 best.ckpt
+# Packed evaluation assets (scripts/eval/pack_eval_assets.sh)
+dist/

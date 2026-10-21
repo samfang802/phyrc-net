@@ -6,7 +6,8 @@ Usage::
     python train_laplacian_cfm.py --laplacian_band d2 ...
     python train_laplacian_cfm.py --laplacian_band d3 ...
 
-Or three parallel ``qsub`` jobs via ``job/DamagePatternGeneration/train_laplacian_cfm.sh``.
+The three-job PBS wrapper (job/DamagePatternGeneration/train_laplacian_cfm.sh) was removed in the job cleanup;
+recover it with ``git show d635bf6:job/DamagePatternGeneration/train_laplacian_cfm.sh``.
 """
 
 import sys
