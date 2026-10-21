@@ -477,6 +477,32 @@ def bind_cfm_options(
         )
     if self.g_pca_dim > 0 and self.physics_bottleneck_dim > 0:
         raise ValueError("Use g_pca_dim or physics_bottleneck_dim, not both")
+    # Oracle: GT-frame DINOv3 embedding replaces GRU g on the same physics path.
+    self.oracle_dino = bool(kwargs.get("oracle_dino", False))
+    self._oracle_dino_encoder = None
+    if self.oracle_dino:
+        if self.g_pca_dim > 0:
+            raise ValueError("oracle_dino replaces GRU g; do not combine with g_pca_dim")
+        for flag in ("use_spall_growth_mask", "use_ar_temporal_pairing", "use_refiner_residual", "use_paired_bridge"):
+            if bool(kwargs.get(flag, False)):
+                raise ValueError(f"oracle_dino only swaps the target-frame g; {flag} also reads GRU g")
+        from src.model.cfm.oracle_dino import DinoOracleEncoder
+
+        self._oracle_dino_encoder = DinoOracleEncoder(
+            kwargs.get("oracle_dino_model_id", "facebook/dinov3-vits16-pretrain-lvd1689m"),
+            pool=str(kwargs.get("oracle_dino_pool", "cls_mean")),
+            size=int(kwargs.get("oracle_dino_size", 224)),
+            pos_blur=str(kwargs.get("oracle_dino_pos_blur", "none")),
+            shift_frac=float(kwargs.get("oracle_dino_shift_frac", 0.3)),
+            shuffle_grid=int(kwargs.get("oracle_dino_shuffle_grid", 4)),
+        )
+        self.physics_dim = int(self._oracle_dino_encoder.feature_dim)
+        print(
+            f"[CFMADM] oracle_dino: {self._oracle_dino_encoder.model_id} "
+            f"pool={self._oracle_dino_encoder.pool} pos_blur={self._oracle_dino_encoder.pos_blur} "
+            f"→ physics_dim={self.physics_dim}",
+            flush=True,
+        )
     self.cfm_physics_num_tokens = int(kwargs.get("cfm_physics_num_tokens", 16))
     self.cfm_physics_token_dim = int(kwargs.get("cfm_physics_token_dim", cfm_cond_dim))
     self.cfm_physics_adagn_dim = int(kwargs.get("cfm_physics_adagn_dim", cfm_cond_dim))

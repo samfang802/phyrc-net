@@ -11,6 +11,8 @@
 | `FLOWEDIT_TEMPORAL.md` | 不重訓的 FlowEdit 時序推論，以及為什麼高 DI 會糊 |
 | `PAIRED_BRIDGE.md` | 疊影的原因，BBDM、I²SB、MasaCtrl、TokenFlow，以及要改成的配對橋 |
 | `SPALL_GROWTH_MASK.md` | 增量遮罩那一版的設計說明 |
+| [`eval/`](eval/README.md) | 生成品質評估：DINOv3 KID、條件指標（probe、GT 鄰居對比、損傷演進）、損傷型態、干擾物處理、目前結果與參考文獻 |
+| [`../job/README.md`](../job/README.md) | PBS 工作腳本：每個腳本的用途、常用覆寫參數、已刪除腳本的取回方式 |
 | `GPU.md` | 這台機器的 PBS `gpu_id` 和 `nvidia-smi` 編號 |
 
 ## 架構沿革

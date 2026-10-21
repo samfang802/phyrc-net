@@ -171,6 +171,56 @@ def add_conditioning_arguments(parser):
             ),
         )
     parser.add_argument(
+            '--oracle_dino',
+            type=lambda x: bool(strtobool(x)),
+            default=False,
+            help=(
+                'Oracle upper bound: replace GRU g with a frozen DINOv3 embedding of the GT frame '
+                '(same physics Linear → gated AdaGN path). physics_dim is set from the encoder.'
+            ),
+        )
+    parser.add_argument(
+            '--oracle_dino_model_id',
+            type=str,
+            default='facebook/dinov3-vits16-pretrain-lvd1689m',
+            help='HF repo id of the DINOv3 encoder used by --oracle_dino.',
+        )
+    parser.add_argument(
+            '--oracle_dino_pool',
+            type=str,
+            default='cls_mean',
+            choices=['cls', 'mean', 'cls_mean'],
+            help='cls: CLS only. mean: mean patch token only. cls_mean: concat both (2x hidden).',
+        )
+    parser.add_argument(
+            '--oracle_dino_size',
+            type=int,
+            default=224,
+            help='Resize the GT frame to this square size before DINOv3.',
+        )
+    parser.add_argument(
+            '--oracle_dino_pos_blur',
+            type=str,
+            default='none',
+            choices=['none', 'shift', 'shuffle'],
+            help=(
+                'Blur WHERE in the GT frame before DINOv3. shift: random translate+flip (train only). '
+                'shuffle: permute grid x grid tiles (random in train, fixed in eval).'
+            ),
+        )
+    parser.add_argument(
+            '--oracle_dino_shift_frac',
+            type=float,
+            default=0.3,
+            help='Max translation as a fraction of image size for pos_blur=shift.',
+        )
+    parser.add_argument(
+            '--oracle_dino_shuffle_grid',
+            type=int,
+            default=4,
+            help='Tiles per side for pos_blur=shuffle (oracle_dino_size must be divisible).',
+        )
+    parser.add_argument(
             '--use_damage_mask_condition',
             type=lambda x: bool(strtobool(x)),
             default=False,

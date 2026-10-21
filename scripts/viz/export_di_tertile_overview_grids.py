@@ -45,6 +45,20 @@ def _parse_args():
     p.add_argument("--cfm_ode_steps", type=int, default=0)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument(
+        "--drift_spread",
+        action="store_true",
+        help="Pick cells evenly spread over |drift| (with DI also increasing), sort ascending, "
+        "and label each cell with drift / DI.",
+    )
+    p.add_argument(
+        "--view_panels",
+        action="store_true",
+        help="One panel per camera view (SW=Pull, NE=Push): rows = drift level (down), "
+        "columns = time within that level (right), <=6 frames per row. Uses --out_name as prefix.",
+    )
+    p.add_argument("--out_name", type=str, default="", help="Short output file stem for the panel PNG.")
+    p.add_argument("--panel_name", type=str, default="", help="Short panel name used as the title.")
+    p.add_argument(
         "--gt_only",
         action="store_true",
         help="Only export the GT 6×6 for the same tertile selection (no ODE).",
@@ -392,6 +406,7 @@ def _collect_candidates(model, dataloader, split, store_interference=False):
                 info = batch["info"]
             else:
                 real_data, hidden_state, direction, exp, timestep, DI, info = batch[:7]
+            hidden_state = model._maybe_oracle_hidden_state(real_data, hidden_state)
             interference = None
             if store_interference and not isinstance(batch, dict) and len(batch) >= 9:
                 interference = (1.0 - batch[-1]).clamp(0.0, 1.0)
@@ -465,6 +480,40 @@ def _select_uniform(pool, di_lo, di_hi, n):
         selected.append((float(t), anchor))
         remaining = [c for c in remaining if c["sample_uid"] != anchor["sample_uid"]]
     return selected
+
+
+_DRIFT_CACHE = {}
+
+
+def _drift_of(exp, timestep):
+    """|Drift| (%) of the simulated loop at `timestep` (row index of Simulate/{exp}.csv)."""
+    if exp not in _DRIFT_CACHE:
+        path = os.path.join(_ROOT, "Data", "Hysteresis", "Simulate", f"{exp}.csv")
+        with open(path) as f:
+            col = f.readline().strip().split(",").index("Drift(%)")
+        _DRIFT_CACHE[exp] = np.loadtxt(path, delimiter=",", skiprows=1, usecols=col)
+    arr = _DRIFT_CACHE[exp]
+    return float(abs(arr[min(int(timestep), len(arr) - 1)]))
+
+
+def _select_drift_spread(pool, di_lo, di_hi, n):
+    """n anchors in the DI bin, evenly spread over |drift|, shown in increasing DI (drift follows)."""
+
+    cands = [c for c in pool if di_lo <= float(c["gt_di"]) <= di_hi]
+    for c in cands:
+        c["drift"] = _drift_of(c["exp"], c["timestep"])
+    cands.sort(key=lambda c: (c["drift"], float(c["gt_di"])))
+    chain = cands
+    targets = np.linspace(chain[0]["drift"], chain[-1]["drift"], n)
+    chosen, used = [], set()
+    for t in targets:
+        order = sorted(range(len(chain)), key=lambda j: abs(chain[j]["drift"] - t))
+        j = next(j for j in order if j not in used)
+        used.add(j)
+        chosen.append(j)
+    chosen.sort(key=lambda j: (float(chain[j]["gt_di"]), chain[j]["drift"]))
+    print(f"[tertile] drift-spread picked {n}/{len(cands)} cands", flush=True)
+    return [(float(chain[j]["gt_di"]), chain[j]) for j in chosen]
 
 
 def _match_anchor(pool, item):
@@ -669,13 +718,17 @@ def _to_vis_numpy(img_t):
     return img_t.numpy()
 
 
-def _save_overview(images, out_path, title, grid_size, vmin=None, vmax=None):
+def _save_overview(images, out_path, title, grid_size, vmin=None, vmax=None, labels=None):
+    labelled = labels is not None
     fig, axes = plt.subplots(
         grid_size,
         grid_size,
-        figsize=(grid_size * 1.2, grid_size * 1.2 + 0.35),
+        figsize=(grid_size * 1.15, grid_size * (1.15 + (0.17 if labelled else 0)) + 0.3),
+        gridspec_kw=dict(wspace=0.04, hspace=0.22 if labelled else 0.04),
     )
     axes = np.atleast_2d(axes)
+    for ax in axes.ravel():
+        ax.axis("off")
     for i, img in enumerate(images):
         r, c = divmod(i, grid_size)
         ax = axes[r, c]
@@ -688,13 +741,41 @@ def _save_overview(images, out_path, title, grid_size, vmin=None, vmax=None):
             if vmax is not None:
                 kw["vmax"] = vmax
         ax.imshow(vis, **kw)
-        ax.axis("off")
+        if labelled:
+            ax.set_title(labels[i], fontsize=6.5, pad=1.5)
     fig.suptitle(title, fontsize=12, y=0.995)
-    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    fig.subplots_adjust(left=0.005, right=0.995, bottom=0.005, top=0.95 if labelled else 0.96)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    fig.savefig(out_path, dpi=170, bbox_inches="tight", pad_inches=0.04)
     plt.close(fig)
     print(f"[tertile] saved {out_path}", flush=True)
+
+
+def _save_drift_time_panel(rows, out_path, title, max_cols=6):
+    """rows: [(drift_label, [(image, caption), ...]), ...] -> drift down, time right."""
+    n_rows = len(rows)
+    fig, axes = plt.subplots(
+        n_rows, max_cols, figsize=(max_cols * 1.15 + 0.5, n_rows * 1.3 + 0.55),
+        gridspec_kw=dict(wspace=0.03, hspace=0.2),
+    )
+    axes = np.atleast_2d(axes)
+    for ax in axes.ravel():
+        ax.axis("off")
+    for r, (drift_label, cells) in enumerate(rows):
+        axes[r, 0].text(-0.06, 0.5, drift_label, transform=axes[r, 0].transAxes,
+                        ha="right", va="center", fontsize=9)
+        for c, (img, cap) in enumerate(cells):
+            vis = _to_vis_numpy(img)
+            axes[r, c].imshow(vis, **({"cmap": "gray"} if vis.ndim == 2 else {}))
+            axes[r, c].set_title(cap, fontsize=6.5, pad=1.5)
+    fig.suptitle(title, fontsize=12, y=0.99)
+    fig.subplots_adjust(left=0.08, right=0.995, bottom=0.04, top=0.9)
+    fig.text(0.005, 0.5, "Drift (%)  ↓", rotation=90, va="center", fontsize=10)
+    fig.text(0.55, 0.008, "DI  →", ha="center", fontsize=10)
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    fig.savefig(out_path, dpi=170, bbox_inches="tight", pad_inches=0.04)
+    plt.close(fig)
+    print(f"[view] saved {out_path}", flush=True)
 
 
 def main():
@@ -976,6 +1057,46 @@ def main():
     if len(pool) < n_per:
         raise RuntimeError(f"pool too small: {len(pool)} < {n_per}")
 
+    if bool(cli.view_panels):
+        label = ds.label
+        code_of = {
+            (str(r.exp), str(r.direction), int(r.timestep)): int(r.filename.split("_")[2])
+            for r in label.itertuples()
+        }
+        save_dir = os.path.join(result_dir, "inference_samples")
+        for view, dname in (("SW", "Pull"), ("NE", "Push")):
+            sel = [
+                c for c in pool
+                if (float(c["direction"][1]) > 0.5) == (dname == "Pull")
+            ]
+            by_code = {}
+            for c in sel:
+                code = code_of[(str(c["exp"]), dname, int(c["timestep"]))]
+                by_code.setdefault(code, []).append(c)
+            rows = []
+            # Rows 0/2/4/6/8 % drift; "0" is the lowest level (0.25 %, frames from the undamaged start).
+            for code, row_lab in ((250, "0"), (2000, "2"), (4000, "4"), (6000, "6"), (8000, "8")):
+                if code not in by_code:
+                    continue
+                fr = sorted(by_code[code], key=lambda c: float(c["gt_di"]))
+                if len(fr) > 6:
+                    fr = [fr[i] for i in np.linspace(0, len(fr) - 1, 6).round().astype(int)]
+                cells = []
+                for a in tqdm(fr, desc=f"{view}-{code}", leave=False):
+                    with torch.no_grad():
+                        item = model._run_inference_for_anchor(
+                            a, float(a["gt_di"]), z0=None,
+                            guidance_weight=float(cli.ref_guidance_weight),
+                        )
+                    cells.append((item["sampled_vis"], f"DI {float(a['gt_di']):.2f}"))
+                rows.append((f"{row_lab}%", cells))
+            _save_drift_time_panel(
+                rows,
+                os.path.join(save_dir, f"{cli.out_name or 'drift_time'}_{view}.png"),
+                f"{view} · Drift × DI",
+            )
+        return
+
     feat_scale = float(cli.feat_guidance_scale)
     if feat_scale != 0.0 and use_sde:
         raise ValueError("feat guidance is ODE-only; use --sampler ode")
@@ -1093,6 +1214,10 @@ def main():
                     f"grid wants {n_per}",
                     flush=True,
                 )
+        elif bool(cli.drift_spread):
+            pairs = _select_drift_spread(
+                avail, di_lo, di_hi - 1e-12 if g_idx < n_groups - 1 else di_hi, n_per
+            )
         else:
             pairs = _select_uniform(
                 avail,
@@ -1296,6 +1421,7 @@ def main():
                         "gt_di": float(anchor["gt_di"]),
                         "exp": str(anchor["exp"]),
                         "timestep": int(anchor["timestep"]),
+                        "drift": _drift_of(str(anchor["exp"]), int(anchor["timestep"])),
                     }
                 )
         images = images_g if images_g else images_mg
@@ -1447,14 +1573,19 @@ def main():
                     )
         out_path = ""
         for suffix, panel_images, panel_note, vmin, vmax in panel_saves:
-            out_path = os.path.join(save_dir, f"{stem}{suffix}.png")
+            out_path = os.path.join(save_dir, f"{cli.out_name or stem}{suffix}.png")
             title = (
                 f"{run_tag} · {selfcond_tag}{mode_tag}{panel_note} · {g_name} DI "
                 f"[{di_lo:.2f}, {di_hi_show:.2f}] · "
                 f"{cli.split} · step {step} · {sampler_tag} · {grid_size}×{grid_size}"
             )
+            labels = None
+            if bool(cli.drift_spread):
+                labels = [f"{r['drift']:.1f}% · DI {r['gt_di']:.2f}" for r in rows]
+                if cli.panel_name:
+                    title = f"{cli.panel_name}{panel_note}"
             _save_overview(
-                panel_images, out_path, title, grid_size, vmin=vmin, vmax=vmax
+                panel_images, out_path, title, grid_size, vmin=vmin, vmax=vmax, labels=labels
             )
         meta_all["groups"].append(
             {

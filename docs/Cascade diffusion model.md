@@ -84,7 +84,7 @@ FreCaS（Frequency-aware Cascaded Sampling）是取樣時的技巧：不重新�
 
 ### 訓練 job 腳本
 
-`job/DamagePatternGeneration/` 底下：`train_ADMCFM_stage1_64.sh`（第一段）、`train_ADMCFM_cascade_64to128.sh`、`train_ADMCFM_cascade_sr.sh`。
+`job/DamagePatternGeneration/` 底下原本有 `train_ADMCFM_stage1_64.sh`（第一段）、`train_ADMCFM_cascade_64to128.sh`、`train_ADMCFM_cascade_sr.sh`。整理 job 時已刪除，要重跑請從 git 取回：`git show d635bf6:job/DamagePatternGeneration/<檔名>`。
 
 ### 結果位置（`results/DamagePatternGeneration/CFMADM/`）
 
@@ -131,4 +131,4 @@ FreCaS（Frequency-aware Cascaded Sampling）是取樣時的技巧：不重新�
 - `cascade128` 和 `cascade128_basic` 沒有 DI 評估或 FID，殘差版和直接版只能目視比較（第 2 節的圖），我還沒有目視比較過。
 - 第二段看到的是 GT 降級出的條件，推論時看到的是第一段的樣本；兩者分佈的差距有多大，沒有量測。第一段如果沒有細節（例如剝落），第二段只能在模糊的基礎上補紋理。
 - 在資料只有約 530 張（4 個試體）的限制下，第二段能學到的高頻細節本身就受限於資料，兩段結構不會憑空增加剝落的種類。
-- `export_inpaint_cascade.sh` 與這裡的 cascade 無關（我沒有深入確認，只是從名稱判斷是 inpaint 資料匯出）。
+- `export_inpaint_cascade.sh`（已刪除，在 git `d635bf6`）與這裡的 cascade 無關（我沒有深入確認，只是從名稱判斷是 inpaint 資料匯出）。

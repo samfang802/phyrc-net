@@ -3,7 +3,7 @@
 #PBS -l place=shared
 #PBS -o log/train_g_prob.out
 #PBS -e log/train_g_prob.err
-#PBS -N CFM_G
+#PBS -N CFM_oracle
 
 # Same Linear(1024→128) split AdaGN, plus train-only 10% g=0 CFG dropout.
 # Does not drop patch XY. Resume-compatible with no-drop Linear ckpt (same arch).
@@ -128,9 +128,9 @@ G_PCA_DIM=0
 
 IMAGE_SIZE="${IMAGE_SIZE:-128}"
 BATCH_SIZE=128
-CFM_MODEL_CHANNELS=32
+CFM_MODEL_CHANNELS="${CFM_MODEL_CHANNELS:-32}"
 CFM_COND_DIM=128
-MAX_STEPS=15000
+MAX_STEPS="${MAX_STEPS:-15000}"
 if [[ "${SPALL_MASK_ONLY}" == "True" || "${SPALL_MASK_ONLY}" == "true" || "${SPALL_MASK_ONLY}" == "1" ]]; then
     MAX_STEPS=2000
 fi
@@ -142,13 +142,13 @@ INFERENCE_TRAIN_ANCHOR_EXP=R615
 INFERENCE_VAL_ANCHOR_EXP=R307
 INFERENCE_ANCHOR_TIMESTEP=-1
 FIXED_DI_VALUES=0.0,0.4,0.75,1.0
-EARLY_STOP_PATIENCE=15000
+EARLY_STOP_PATIENCE="${EARLY_STOP_PATIENCE:-15000}"
 EARLY_STOP_MIN_DELTA=0.0
 USE_EARLY_STOPPING=False
 RESET_EARLY_STOP_PATIENCE=True
 RESET_EARLY_STOP_BEST_SCORE=False
-CHECKPOINT_EVERY_N_STEPS=2000
-CHECKPOINT_START_STEP=2000
+CHECKPOINT_EVERY_N_STEPS="${CHECKPOINT_EVERY_N_STEPS:-2000}"
+CHECKPOINT_START_STEP="${CHECKPOINT_START_STEP:-2000}"
 
 EXTRACTOR_PATH="./phase1_extractor"
 if [[ ! -f "${EXTRACTOR_PATH}/best.ckpt" || ! -f "${EXTRACTOR_PATH}/args.json" ]]; then
@@ -158,7 +158,8 @@ if [[ ! -f "${EXTRACTOR_PATH}/best.ckpt" || ! -f "${EXTRACTOR_PATH}/args.json" ]
 fi
 
 # Fresh run: M now predicts accumulated extent, so the old incremental head is the wrong function.
-RESUME_CKPT=""
+RESUME_CKPT="${RESUME_CKPT:-results/DamagePatternGeneration/CFMADM/2026-10-17_17-13-26/Opensees Based damage Patterns Generation/41syx1zf/checkpoints/last.ckpt}"
+[[ "${RESUME_CKPT}" == "none" ]] && RESUME_CKPT=""   # RESUME_CKPT=none: start from scratch
 if [[ -n "${RESUME_CKPT}" ]]; then
     if [[ ! -f "${RESUME_CKPT}" ]]; then
         echo "[train_ADMCFM] Resume checkpoint not found: ${RESUME_CKPT}"
