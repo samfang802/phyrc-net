@@ -239,6 +239,208 @@ class CFMLossMixin:
         return self._refiner_base_sample(info, hs, dr, di, mask_combined, full)
 
 
+    def _refiner_state_track(self, ar_pack, info, mask_combined, b, device, dtype):
+        """State track (no grad). Returns (has_prev [B] bool, S_in [B,C,H,W]).
+
+        Single hop: ``S_in`` = base sample of frame t-1. Chain (prob ``refiner_chain_prob``, always
+        in eval): base sample of frame t-2, then one hop of this network to frame t-1.
+        The base hop reads the offline full-ODE cache (``state_prev`` / ``state_prev2`` in the
+        batch) when the dataset provides it, else samples the frozen base on the fly.
+        """
+
+        def _flag(key):
+            v = ar_pack.get(key)
+            if v is None:
+                return torch.zeros(b, dtype=torch.bool, device=device)
+            return v.reshape(b).to(device=device) >= 0.5
+
+        has_prev = _flag("has_prev")
+        has_prev2 = _flag("has_prev2") & has_prev
+        hs1, dr1, di1 = (
+            ar_pack["hidden_state_prev"],
+            ar_pack["direction_prev"],
+            ar_pack["DI_prev"],
+        )
+        use_chain = (not self.training) or (
+            float(torch.rand(1).item()) < float(self.refiner_chain_prob)
+        )
+        chain_ok = use_chain and ar_pack.get("hidden_state_prev2") is not None
+        self._last_refiner_chain = float(chain_ok)
+        cached1 = ar_pack.get("state_prev")
+        cached2 = ar_pack.get("state_prev2")
+
+        with torch.no_grad():
+            if chain_ok:
+                def _pick(a2, a1):
+                    return torch.where(has_prev2.view(b, *([1] * (a1.ndim - 1))), a2, a1)
+
+                hs0 = _pick(ar_pack["hidden_state_prev2"], hs1)
+                if cached1 is not None and cached2 is not None:
+                    s0 = _pick(cached2, cached1).to(device=device)
+                else:
+                    dr0 = _pick(ar_pack["direction_prev2"], dr1)
+                    di0 = _pick(ar_pack["DI_prev2"], di1)
+                    s0 = self._refiner_base_sample(
+                        info, hs0, dr0, di0, mask_combined, self._refiner_draw_full()
+                    )
+                c1, g1 = self._unpack_conditions(info, hs1, dr1, di1)
+                dg_hop = None
+                if self.use_delta_g:
+                    dg_hop = g1 - self.process_physics_condition(hs0)
+                s1 = self._refiner_state_step(
+                    s0, c1, g1, mask_combined, self._refiner_draw_full(), gru_delta=dg_hop
+                )
+                s_in = torch.where(has_prev2.view(b, 1, 1, 1), s1, s0)
+            elif cached1 is not None:
+                s_in = cached1.to(device=device)
+            else:
+                s_in = self._refiner_base_sample(
+                    info, hs1, dr1, di1, mask_combined, self._refiner_draw_full()
+                )
+        return has_prev, s_in.to(dtype=dtype)
+
+
+    def _refiner_state_condition(self, s_in):
+        """What the network reads as S_{t-1}: perturbed (optional) plus Gaussian noise, training only."""
+        if not self.training:
+            return s_in
+        s = self._perturb_refiner_state(s_in) if self.refiner_state_perturb else s_in
+        b = s.shape[0]
+        state_std = torch.rand(b, device=s.device, dtype=s.dtype) * float(self.refiner_state_noise_max)
+        return s + state_std.view(b, 1, 1, 1) * torch.randn_like(s)
+
+
+    @torch.no_grad()
+    def _perturb_refiner_state(self, s):
+        """Make S_{t-1} look like a wrongly exposed / under-damaged previous output.
+
+        Per sample: exposure offset (half the batch), contrast gain about the image mean, a smooth
+        brightness field on 32 px cells, dark (damage) pixels pulled toward the median, and
+        sometimes a blur. Clipped to the image range, so a pushed-up frame also saturates.
+        """
+        b = s.shape[0]
+        dev, dt = s.device, s.dtype
+        shape = (b, 1, 1, 1)
+        mean = s.mean(dim=(1, 2, 3), keepdim=True)
+        gain = 1.0 + (torch.rand(shape, device=dev, dtype=dt) * 2.0 - 1.0) * float(self.refiner_state_gain_jitter)
+        out = mean + (s - mean) * gain
+        lo, hi = float(self.refiner_state_bias_min), float(self.refiner_state_bias_max)
+        bias = lo + (hi - lo) * torch.rand(shape, device=dev, dtype=dt)
+        out = out + bias * (torch.rand(shape, device=dev) < 0.5).to(dt)
+        h, w = s.shape[-2:]
+        field = torch.randn(b, 1, max(h // 32, 2), max(w // 32, 2), device=dev, dtype=dt)
+        field = F.interpolate(field, size=(h, w), mode="bicubic", align_corners=False)
+        out = out + float(self.refiner_state_lowfreq_std) * field
+        median = s.flatten(1).median(dim=1).values.view(shape)
+        lam = float(self.refiner_state_damage_shrink)
+        keep = lam + (1.0 - lam) * torch.rand(shape, device=dev, dtype=dt)
+        dark = (s < median - 0.3).to(dt)
+        out = out + dark * (1.0 - keep) * (median - s)
+        blur_on = torch.rand(b, device=dev) < float(self.refiner_state_blur_prob)
+        if bool(blur_on.any()):
+            sigma = torch.where(blur_on, 0.5 + torch.rand(b, device=dev), torch.zeros(b, device=dev))
+            out = self._gaussian_blur_nchw(out, sigma)
+        return out.clamp(-1.0, 1.0)
+
+
+    @staticmethod
+    def _lowpass_tone(x, block=16):
+        """Block means: the global / low-frequency brightness the tone loss compares."""
+        k = max(1, min(int(block), int(x.shape[-1]), int(x.shape[-2])))
+        return F.avg_pool2d(x.mean(dim=1, keepdim=True), kernel_size=k, stride=k)
+
+
+    def refiner_implicit_flow_matching_loss(
+        self,
+        z_target,
+        ar_pack,
+        info,
+        c_target,
+        gru_feat_target=None,
+        valid_mask=None,
+        mask_combined=None,
+    ):
+        """Refiners that generate x_t itself (v10.5 implicit, v10.6 target_x1).
+
+        State track as in V10 (``_refiner_state_track``). Loss track is plain CFM to the frame:
+        ``z_τ = (1-τ) x0 + τ x_t``, ``v = x_t - x0``, with ``S_{t-1}`` as the control hint
+        (v10.5) or as concatenated input channels (v10.6). Optional tone loss on the block means
+        of ``x̂1 = z_τ + (1-τ) v``.
+
+        v10.5: samples without a previous frame, and a ``refiner_control_drop_prob`` share of the
+        rest, run with the control branch off (the single-frame task); every sample counts.
+        v10.6 (``refiner_target_x1``, with or without the control branch): no single-frame task;
+        samples without a previous frame have weight 0, as in V10.
+        """
+        b = z_target.shape[0]
+        device = z_target.device
+        dtype = z_target.dtype
+        has_prev, s_in = self._refiner_state_track(ar_pack, info, mask_combined, b, device, dtype)
+        hs1 = ar_pack["hidden_state_prev"]
+        s_cond = self._refiner_state_condition(s_in)
+
+        control_scale = None
+        weight = has_prev.to(dtype)
+        if self.refiner_implicit and not self.refiner_target_x1:
+            keep = has_prev
+            if self.training and float(self.refiner_control_drop_prob) > 0.0:
+                keep = keep & (torch.rand(b, device=device) >= float(self.refiner_control_drop_prob))
+            control_scale = keep.to(dtype)
+            weight = torch.ones_like(weight)
+            self._last_refiner_control_frac = float(control_scale.mean())
+
+        z0 = torch.randn_like(z_target)
+        t = torch.rand(b, device=device, dtype=dtype).clamp(min=1e-5, max=1.0 - 1e-5)
+        coords = None
+        x1 = z_target
+        if self.use_patch_diffusion:
+            x1, valid_mask, coords, mask_combined, z0, s_cond = self._apply_patch_crop(
+                x1,
+                valid_mask=valid_mask,
+                condition_mask=mask_combined,
+                z0=z0,
+                z_aux=s_cond,
+                flow_t=t,
+            )
+        t_ = t.view(b, 1, 1, 1)
+        zt = (1.0 - t_) * z0 + t_ * x1
+        target_u = x1 - z0
+
+        dg_target = None
+        if self.use_delta_g:
+            dg_target = gru_feat_target - self.process_physics_condition(hs1)
+        v_pred = self._predict_velocity(
+            zt,
+            t,
+            c_target,
+            coords=coords,
+            damage_mask=mask_combined,
+            gru_feat=gru_feat_target,
+            lr_cond=s_cond,
+            gru_delta=dg_target,
+            control_scale=control_scale,
+        )
+        per_sample_loss = self._cfm_mse(v_pred, target_u, valid_mask=valid_mask)
+        if self.use_velocity_min_snr_weighting:
+            per_sample_loss = per_sample_loss * self._compute_velocity_min_snr_weight(t).to(
+                per_sample_loss.dtype
+            )
+        denom = weight.sum().clamp_min(1.0)
+        loss = (per_sample_loss * weight).sum() / denom
+        self._last_fm_loss = float(loss.detach())
+
+        tone_w = float(self.refiner_tone_loss_weight)
+        if tone_w > 0.0:
+            # Weighted by τ: x̂1 is only a blurry mean near the noise end.
+            x1_hat = self._estimate_clean_from_velocity(zt, t, v_pred)
+            block = int(self.refiner_lowfreq_block)
+            diff = (self._lowpass_tone(x1_hat, block) - self._lowpass_tone(x1, block)).pow(2)
+            tone = (diff.mean(dim=(1, 2, 3)) * t * weight).sum() / denom
+            self._last_refiner_tone_loss = float(tone.detach())
+            loss = loss + tone_w * tone
+        return loss
+
+
     def refiner_residual_flow_matching_loss(
         self,
         z_target,
@@ -263,54 +465,9 @@ class CFMLossMixin:
         b = z_target.shape[0]
         device = z_target.device
         dtype = z_target.dtype
-
-        def _flag(key):
-            v = ar_pack.get(key)
-            if v is None:
-                return torch.zeros(b, dtype=torch.bool, device=device)
-            return v.reshape(b).to(device=device) >= 0.5
-
-        has_prev = _flag("has_prev")
-        has_prev2 = _flag("has_prev2") & has_prev
-        hs1, dr1, di1 = (
-            ar_pack["hidden_state_prev"],
-            ar_pack["direction_prev"],
-            ar_pack["DI_prev"],
-        )
-        use_chain = (not self.training) or (
-            float(torch.rand(1).item()) < float(self.refiner_chain_prob)
-        )
-        chain_ok = use_chain and ar_pack.get("hidden_state_prev2") is not None
-        self._last_refiner_chain = float(chain_ok)
-
-        with torch.no_grad():
-            if chain_ok:
-                def _pick(a2, a1):
-                    return torch.where(has_prev2.view(b, *([1] * (a1.ndim - 1))), a2, a1)
-
-                hs0 = _pick(ar_pack["hidden_state_prev2"], hs1)
-                dr0 = _pick(ar_pack["direction_prev2"], dr1)
-                di0 = _pick(ar_pack["DI_prev2"], di1)
-                s0 = self._refiner_base_sample(
-                    info, hs0, dr0, di0, mask_combined, self._refiner_draw_full()
-                )
-                c1, g1 = self._unpack_conditions(info, hs1, dr1, di1)
-                dg_hop = None
-                if self.use_delta_g:
-                    dg_hop = g1 - self.process_physics_condition(hs0)
-                s1 = self._refiner_state_step(
-                    s0, c1, g1, mask_combined, self._refiner_draw_full(), gru_delta=dg_hop
-                )
-                s_in = torch.where(has_prev2.view(b, 1, 1, 1), s1, s0)
-            else:
-                s_in = self._refiner_base_sample(
-                    info, hs1, dr1, di1, mask_combined, self._refiner_draw_full()
-                )
-            s_in = s_in.to(dtype=dtype)
-
-        noise_max = float(self.refiner_state_noise_max) if self.training else 0.0
-        state_std = torch.rand(b, device=device, dtype=dtype) * noise_max
-        s_cond = s_in + state_std.view(b, 1, 1, 1) * torch.randn_like(s_in)
+        has_prev, s_in = self._refiner_state_track(ar_pack, info, mask_combined, b, device, dtype)
+        hs1 = ar_pack["hidden_state_prev"]
+        s_cond = self._refiner_state_condition(s_in)
 
         resid = z_target - s_in
         z0 = torch.randn_like(resid)

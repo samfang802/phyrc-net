@@ -446,6 +446,43 @@ def bind_cfm_options(
                 "self-conditioning, or cascade SR"
             )
     self._refiner_base_ref = []
+    # v10.5 implicit refiner: S_{t-1} through a ControlNet branch, the net generates x_t.
+    self.refiner_implicit = bool(kwargs.get("refiner_implicit", False))
+    # v10.6: the net generates x_t (no S + residual) and never learns the single-frame task.
+    # S_{t-1} is concatenated as in V10 (F / S), or with --refiner_implicit goes through the
+    # control branch (C).
+    self.refiner_target_x1 = bool(kwargs.get("refiner_target_x1", False))
+    self.control_inject_encoder = bool(kwargs.get("control_inject_encoder", False))
+    # v10.6-C: nycu-project control branch (reads S_{t-1} alone, fresh weights, no mid).
+    self.control_hint_only = bool(kwargs.get("control_hint_only", False))
+    self.freeze_trunk = bool(kwargs.get("freeze_trunk", False))
+    self.trunk_lr_mult = float(kwargs.get("trunk_lr_mult", 0.2))
+    self.refiner_control_drop_prob = float(kwargs.get("refiner_control_drop_prob", 0.15))
+    self.control_guidance = float(kwargs.get("control_guidance", 1.0))
+    self.refiner_state_perturb = bool(kwargs.get("refiner_state_perturb", False))
+    self.refiner_state_bias_min = float(kwargs.get("refiner_state_bias_min", -0.2))
+    self.refiner_state_bias_max = float(kwargs.get("refiner_state_bias_max", 0.4))
+    self.refiner_state_gain_jitter = float(kwargs.get("refiner_state_gain_jitter", 0.15))
+    self.refiner_state_lowfreq_std = float(kwargs.get("refiner_state_lowfreq_std", 0.08))
+    self.refiner_state_damage_shrink = float(kwargs.get("refiner_state_damage_shrink", 0.7))
+    self.refiner_state_blur_prob = float(kwargs.get("refiner_state_blur_prob", 0.3))
+    self.refiner_tone_loss_weight = float(kwargs.get("refiner_tone_loss_weight", 0.0))
+    self.refiner_shared_lowfreq_noise = bool(kwargs.get("refiner_shared_lowfreq_noise", False))
+    self.refiner_lowfreq_block = int(kwargs.get("refiner_lowfreq_block", 16))
+    if self.refiner_implicit and not self.use_refiner_residual:
+        raise ValueError("--refiner_implicit requires --use_refiner_residual")
+    if self.refiner_target_x1 and not self.use_refiner_residual:
+        raise ValueError("--refiner_target_x1 requires --use_refiner_residual")
+    if (self.control_inject_encoder or self.freeze_trunk or self.control_hint_only) and not self.refiner_implicit:
+        raise ValueError("--control_inject_encoder / --freeze_trunk / --control_hint_only require --refiner_implicit")
+    if not (0.0 <= self.refiner_control_drop_prob < 1.0):
+        raise ValueError(f"refiner_control_drop_prob must be in [0, 1), got {self.refiner_control_drop_prob}")
+    if self.refiner_state_bias_max < self.refiner_state_bias_min:
+        raise ValueError("refiner_state_bias_max must be >= refiner_state_bias_min")
+    if not (0.0 < self.refiner_state_damage_shrink <= 1.0):
+        raise ValueError(f"refiner_state_damage_shrink must be in (0, 1], got {self.refiner_state_damage_shrink}")
+    if self.refiner_lowfreq_block < 1:
+        raise ValueError(f"refiner_lowfreq_block must be >= 1, got {self.refiner_lowfreq_block}")
     self.repel_prev_scale = float(kwargs.get("repel_prev_scale", 0.0))
     self.repel_prev_mode = str(kwargs.get("repel_prev_mode", "x1")).lower()
     if self.repel_prev_mode not in ("x1", "state"):
@@ -465,6 +502,8 @@ def bind_cfm_options(
     self.use_damage_mask_condition = bool(kwargs.get("use_damage_mask_condition", False))
     self.use_object_loss_mask = bool(kwargs.get("use_object_loss_mask", True))
     self.physics_dim = int(kwargs.get("physics_dim", 1024))
+    # v11: the physics vector ends with this many damage scalars (own gated branch in the velocity net).
+    self.damage_scalar_dim = int(kwargs.get("damage_scalar_dim", 0))
     self.g_pca_dim = int(kwargs.get("g_pca_dim", 0))
     if self.g_pca_dim < 0:
         raise ValueError(f"g_pca_dim must be >= 0, got {self.g_pca_dim}")
@@ -586,7 +625,11 @@ def bind_cfm_options(
     net_in_channels = (
         self.model_in_channels
         + (self.model_in_channels if self.use_self_conditioning else 0)
-        + (self.model_in_channels if (self.use_cascade_sr or self.use_refiner_residual) else 0)
+        + (
+            self.model_in_channels
+            if (self.use_cascade_sr or (self.use_refiner_residual and not self.refiner_implicit))
+            else 0
+        )
         + self.coord_channels
         + (2 if self.use_spall_growth_mask else 0)
     )
@@ -626,7 +669,19 @@ def bind_cfm_options(
         physics_token_dim=self.cfm_physics_token_dim,
         physics_adagn_dim=self.cfm_physics_adagn_dim,
         gated_fusion_alpha_dim=self.gated_fusion_alpha_dim,
-        **({"use_delta_g": True} if self.use_delta_g else {}),
+        **({"use_delta_g": True} if self.use_delta_g and not self.refiner_implicit else {}),
+        damage_scalar_dim=self.damage_scalar_dim,
+        **(
+            {
+                "use_control_branch": True,
+                "control_hint_channels": self.model_in_channels,
+                "control_delta_g": self.use_delta_g,
+                "control_inject_encoder": self.control_inject_encoder,
+                "control_hint_only": self.control_hint_only,
+            }
+            if self.refiner_implicit
+            else {}
+        ),
         image_channels=self.model_in_channels,
         self_cond_channels=(self.model_in_channels if self.use_self_conditioning else 0),
         use_undamaged_ref=self.use_undamaged_ref,
@@ -639,6 +694,10 @@ def bind_cfm_options(
         freeu_r_thresh=float(kwargs.get("freeu_r_thresh", 0.25)),
     )
     self.velocity_net.spall_cond_channels = 2 if self.use_spall_growth_mask else 0
+    if self.freeze_trunk:
+        for name, param in self.velocity_net.named_parameters():
+            if not name.startswith("control."):
+                param.requires_grad = False
     if self.use_spall_growth_mask:
         with torch.no_grad():
             weight = self.velocity_net.in_conv.weight

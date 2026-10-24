@@ -2,8 +2,8 @@
 """Generate K samples per test condition and save them for eval_dinov3_kid.py.
 
 Single-frame path: same loader and `_generate_batch` as eval_cfm_generated_r2_siamese.py.
-Residual refiner (use_refiner_residual): each face of each column is walked in timestep order with
-`sample_refiner_sequence` (frame 0 = frozen base model, later frames = previous state + residual),
+Refiners (use_refiner_residual, V10 residual or v10.5 implicit): each face of each column is walked in timestep
+order with `sample_refiner_sequence` (frame 0 = frozen base model, later frames from the previous state),
 K trajectories side by side in the batch, as in export_di_tertile_overview_grids.py. The frames of
 a trajectory are the split's labelled frames of that face. Bridge / FlowEdit can write the same npz
 with `save_samples_npz` below.
@@ -41,6 +41,7 @@ from argument.argument_mixed import set_dataset_args
 from src.dataset import PatternLoopDataset
 from src.metrics.dino_mmd import to_uint8_gray
 from src.metrics.samples_io import save_samples_npz  # noqa: F401  (re-exported for older callers)
+from src.metrics.train_kid import refiner_sequence_samples
 from src.utils import build_damage_image_transform_with_loss_mask
 from train_mixed import _load_args_from_result_dir, _resolve_num_workers, _resolve_required_match
 
@@ -86,33 +87,9 @@ def _apply_overrides(model, pairs):
         print(f"[gen] {key}={val!r}", flush=True)
 
 
-@torch.no_grad()
 def _generate_refiner(cfm, dl, ds, K, seed, device):
     """Walk every (column, direction) in timestep order; K trajectories per walk."""
-    if len(ds) != len(ds.label):
-        raise ValueError("refiner path needs one dataset item per label row")
-    cs, gs, real, cond, DI = [], [], [], [], []
-    for batch in dl:
-        real_data, hidden_state, direction, _exp, _t, di, info, *_ = cfm._unpack_generation_batch(batch)
-        c, g = cfm._unpack_conditions(info.to(device), hidden_state.to(device), direction.to(device), di.to(device))
-        cs.append(c)
-        gs.append(g)
-        real.append(to_uint8_gray(real_data))
-        cond.append(hidden_state.reshape(hidden_state.shape[0], -1).float().cpu().numpy())
-        DI.append(di.view(-1).float().cpu().numpy())
-    c_all = torch.cat(cs)
-    g_all = None if gs[0] is None else torch.cat(gs)
-    lab = ds.label
-    fake = np.empty((len(lab), K, *real[0].shape[1:]), dtype=np.uint8)
-    for (exp, direction), rows in lab.groupby(["exp", "direction"], sort=True):
-        order = rows.sort_values("timestep", kind="stable").index.to_numpy()
-        torch.manual_seed(seed + hash((str(exp), str(direction))) % 10007)
-        conds = [c_all[i : i + 1].repeat(K, 1) for i in order]
-        feats = [None if g_all is None else g_all[i : i + 1].repeat(K, *[1] * (g_all.dim() - 1)) for i in order]
-        print(f"[gen] refiner {exp}/{direction}: {len(order)} frames x K={K}", flush=True)
-        for i, z in zip(order, cfm.sample_refiner_sequence(conds, feats)):
-            fake[i] = to_uint8_gray(cfm._decode_from_target_space(z))
-    return fake, real, cond, DI
+    return refiner_sequence_samples(cfm, dl, ds, K, seed, device)
 
 
 def main():
@@ -227,6 +204,8 @@ def main():
         "overrides": list(cli.set),
         "shared_noise": bool(cli.shared_noise),
         "sampler": "refiner_sequence" if bool(getattr(cfm, "use_refiner_residual", False)) else "single_frame",
+        "refiner_implicit": bool(getattr(cfm, "refiner_implicit", False)),
+        "refiner_shared_lowfreq_noise": bool(getattr(cfm, "refiner_shared_lowfreq_noise", False)),
     }
     save_samples_npz(
         cli.out, fake, np.concatenate(real), np.concatenate(cond), np.concatenate(DI),

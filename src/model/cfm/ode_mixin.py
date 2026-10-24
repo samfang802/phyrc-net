@@ -996,10 +996,29 @@ class CFMODEMixin:
             x_prev = x.detach()
         return frames
 
+    @staticmethod
+    def _block_mean(x, block):
+        """Orthogonal projection onto block-constant images (avg-pool, nearest upsample)."""
+        low = F.avg_pool2d(x, kernel_size=block, stride=block)
+        return F.interpolate(low, size=x.shape[-2:], mode="nearest")
+
+    def _refiner_start_noise(self, shared, batch, device):
+        """Start noise of one frame. With ``refiner_shared_lowfreq_noise`` the block-mean band comes
+        from ``shared`` (one draw per trajectory) and the rest is fresh; both parts are independent
+        projections of white noise, so every frame is still exactly N(0, I)."""
+        size = int(self.model_spatial_size)
+        eps = torch.randn((batch, self.model_in_channels, size, size), device=device)
+        if shared is None:
+            return eps
+        block = int(self.refiner_lowfreq_block)
+        return eps - self._block_mean(eps, block) + self._block_mean(shared, block)
+
     def sample_refiner_sequence(self, conds, gru_feats, num_steps=None, damage_mask=None):
         """Walk a column. Frame 0 is the frozen single-frame model. Each later frame is drawn
-        from noise with ``S_{t-1}`` locked as an input channel and added outside the network:
-        ``S_t = clamp(S_{t-1} + residual)``.
+        from noise with ``S_{t-1}`` locked: V10 adds the sampled residual outside the network,
+        ``S_t = clamp(S_{t-1} + residual)``; the v10.5 implicit refiner reads ``S_{t-1}`` in its
+        control branch and generates ``S_t`` directly. ``refiner_shared_lowfreq_noise`` gives all
+        frames of a trajectory the same low-frequency start noise (frame 0 included).
         """
         if len(conds) != len(gru_feats):
             raise ValueError(
@@ -1010,18 +1029,23 @@ class CFMODEMixin:
         base = self._refiner_base_ref[0]
         frames = []
         state = None
+        shared = None
+        if getattr(self, "refiner_shared_lowfreq_noise", False) and conds:
+            shared = self._refiner_start_noise(None, conds[0].shape[0], conds[0].device)
         for i, (c, g) in enumerate(zip(conds, gru_feats)):
             mask_i = damage_mask[i] if per_frame_mask else damage_mask
             dg = None if i == 0 or not getattr(self, "use_delta_g", False) else g - gru_feats[i - 1]
+            z0 = self._refiner_start_noise(shared, c.shape[0], c.device)
             if state is None:
                 c_base = c
                 base_in = int(base.velocity_net.scalar_mlp[0].in_features)
                 if c.shape[1] + 1 == base_in:
                     c_base = torch.cat([torch.zeros_like(c[:, :1]), c], dim=1)
-                x = base.sample_with_ode(c_base, gru_feat=g, num_steps=num_steps, damage_mask=mask_i)
+                x = base.sample_with_ode(c_base, z0=z0, gru_feat=g, num_steps=num_steps, damage_mask=mask_i)
             else:
                 x = self.sample_with_ode(
                     c,
+                    z0=z0,
                     gru_feat=g,
                     num_steps=num_steps,
                     damage_mask=mask_i,

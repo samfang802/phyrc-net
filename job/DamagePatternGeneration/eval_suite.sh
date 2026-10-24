@@ -1,5 +1,5 @@
 #!/bin/bash
-#PBS -l select=1:ncpus=4:mem=15gb:gpu_id=6
+#PBS -l select=1:ncpus=2:mem=15gb:gpu_id=6
 #PBS -l place=shared
 #PBS -o log/eval_suite.out
 #PBS -e log/eval_suite.err

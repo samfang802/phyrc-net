@@ -144,9 +144,11 @@ class CFMLifecycleMixin:
         for k in [k for k in state if str(k).startswith("fid.") or "u2_vss" in str(k)]:
             del state[k]
         w = state.get("velocity_net.scalar_mlp.0.weight")
+        # Old checkpoints kept a zeroed DI slot: one input more than face one-hot (+ v11 loading sign).
+        n_dir = 2 + int(bool(getattr(frozen_args, "load_sign_condition", False)))
         if (
             w is not None
-            and int(w.shape[1]) == 3
+            and int(w.shape[1]) == n_dir + 1
             and bool(getattr(frozen_args, "zero_di_condition", False))
         ):
             frozen_args.keep_zero_di_slot = True

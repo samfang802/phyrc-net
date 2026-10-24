@@ -151,6 +151,7 @@ summarize_eval.py                            → summary.md
 | [damage_texture.md](damage_texture.md) | 損傷型態的像素統計：灰霧、白塊、裂縫與訓練柱的重疊 |
 | [temporal.md](temporal.md) | 時序一致性：閃爍、色調跳動、損傷與裂縫的保留；共用雜訊對照 |
 | [oracle.md](oracle.md) | Oracle 版本（GT 的 DINOv3 特徵當條件）：目的、對照組、循環偏差、怎麼讀 |
+| [condition_g.md](condition_g.md) | 遲滯迴圈條件與 GRU 隱狀態 g：影像柱在資料集的位置、g 的組成、生成器眼中的 CTR1 / R307、Δg、條件端建議 |
 | [results.md](results.md) | 目前三個模型（gn、base0920、cGAN）的結果與解讀 |
 | [references.md](references.md) | 參考文獻，依指標分類 |
 | [research_log.md](research_log.md) | 原始研究筆記，記錄了每一步怎麼走到現在的設計。**裡面較早的數字有些已被更正**，以 results.md 為準 |

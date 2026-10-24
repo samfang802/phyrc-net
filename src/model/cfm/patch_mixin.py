@@ -332,6 +332,9 @@ class CFMPatchMixin:
 
 
     def _compose_cascade_sample(self, sampled, lr_cond):
+        if getattr(self, "refiner_implicit", False) or getattr(self, "refiner_target_x1", False):
+            # v10.5 / v10.6: the network generates the frame itself; S_{t-1} was only a condition.
+            return sampled
         if self.use_refiner_residual:
             return (sampled + lr_cond).clamp(-1.0, 1.0)
         if not self.cascade_predict_residual:
@@ -358,7 +361,7 @@ class CFMPatchMixin:
                 raise ValueError("self_cond provided but use_self_conditioning=False")
             z_in = z_image
 
-        if self.use_cascade_sr or self.use_refiner_residual:
+        if self.use_cascade_sr or (self.use_refiner_residual and not getattr(self, "refiner_implicit", False)):
             if lr_cond is None:
                 raise ValueError("lr_cond (state S_{t-1}) is required for cascade SR / refiner residual")
             if lr_cond.shape[1] != z_image.shape[1]:
@@ -408,22 +411,39 @@ class CFMPatchMixin:
         return_attn_map=False,
         ref_feat=None,
         gru_delta=None,
+        control_scale=None,
     ):
+        # v10.5: S_{t-1} (passed as lr_cond) is the ControlNet hint, not an input channel.
+        control_hint = lr_cond if getattr(self, "refiner_implicit", False) else None
         model_in = self._build_velocity_net_input(
-            z_image, coords=coords, self_cond=self_cond, lr_cond=lr_cond, spall_cond=spall_cond
+            z_image,
+            coords=coords,
+            self_cond=self_cond,
+            lr_cond=None if control_hint is not None else lr_cond,
+            spall_cond=spall_cond,
         )
         if ref_feat is None:
             ref_feat = getattr(self, "_undamaged_ref_embed", None)
-        pred = self.velocity_net(
-            model_in,
-            t,
-            c,
-            gru_feat=gru_feat,
-            damage_mask=damage_mask,
-            return_attn_map=return_attn_map,
-            ref_feat=ref_feat,
-            **({"gru_delta": gru_delta} if gru_delta is not None else {}),
-        )
+
+        def _net(hint, scale):
+            return self.velocity_net(
+                model_in,
+                t,
+                c,
+                gru_feat=gru_feat,
+                damage_mask=damage_mask,
+                return_attn_map=return_attn_map,
+                ref_feat=ref_feat,
+                **({"gru_delta": gru_delta} if gru_delta is not None else {}),
+                **({"control_hint": hint, "control_scale": scale} if hint is not None else {}),
+            )
+
+        pred = _net(control_hint, control_scale)
+        w = float(getattr(self, "control_guidance", 1.0))
+        if control_hint is not None and not self.training and w != 1.0 and not return_attn_map:
+            # Control guidance: v_off + w (v_on - v_off); v_off is the trunk alone.
+            pred_off = _net(None, None)
+            pred = pred_off + w * (pred - pred_off)
         attn_maps = None
         if return_attn_map:
             if not isinstance(pred, tuple) or len(pred) != 2:

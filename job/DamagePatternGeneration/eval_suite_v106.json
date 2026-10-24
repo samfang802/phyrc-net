@@ -1,0 +1,57 @@
+{
+  "out_dir": "results/eval_suite/v106",
+  "splits": [
+    "test"
+  ],
+  "k": 8,
+  "baseline": "refiner",
+  "dino_model": "facebook/dinov3-vits16-pretrain-lvd1689m",
+  "extra_dino_models": [],
+  "remove_interference": false,
+  "models": [
+    {
+      "name": "v106F",
+      "result_dir": "results/DamagePatternGeneration/CFMADM/2026-10-23_02-44-06_v106F",
+      "checkpoint": "results/DamagePatternGeneration/CFMADM/2026-10-23_02-44-06_v106F/checkpoint_step_015000.pt"
+    },
+    {
+      "name": "v106F_noLF",
+      "result_dir": "results/DamagePatternGeneration/CFMADM/2026-10-23_02-44-06_v106F",
+      "checkpoint": "results/DamagePatternGeneration/CFMADM/2026-10-23_02-44-06_v106F/checkpoint_step_015000.pt",
+      "set": [
+        "refiner_shared_lowfreq_noise=0"
+      ]
+    },
+    {
+      "name": "v106S",
+      "result_dir": "results/DamagePatternGeneration/CFMADM/2026-10-23_02-44-06_v106S",
+      "checkpoint": "results/DamagePatternGeneration/CFMADM/2026-10-23_02-44-06_v106S/checkpoint_step_015000.pt"
+    },
+    {
+      "name": "v106S_noLF",
+      "result_dir": "results/DamagePatternGeneration/CFMADM/2026-10-23_02-44-06_v106S",
+      "checkpoint": "results/DamagePatternGeneration/CFMADM/2026-10-23_02-44-06_v106S/checkpoint_step_015000.pt",
+      "set": [
+        "refiner_shared_lowfreq_noise=0"
+      ]
+    },
+    {
+      "name": "refiner",
+      "npz": {
+        "test": "results/eval_suite/v105/test/samples/refiner.npz"
+      }
+    },
+    {
+      "name": "gn",
+      "npz": {
+        "test": "results/eval_suite/v105/test/samples/gn.npz"
+      }
+    },
+    {
+      "name": "v105A",
+      "npz": {
+        "test": "results/eval_suite/v105/test/samples/v105A.npz"
+      }
+    }
+  ]
+}

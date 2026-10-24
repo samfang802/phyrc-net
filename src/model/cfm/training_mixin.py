@@ -105,6 +105,9 @@ class CFMTrainingMixin:
                 on_step=True,
                 on_epoch=False,
             )
+        alpha_d_val = self.velocity_net.get_damage_alpha() if hasattr(self.velocity_net, "get_damage_alpha") else None
+        if alpha_d_val is not None:
+            self.log("train/damage_alpha", alpha_d_val, prog_bar=False, on_step=True, on_epoch=False)
         alpha_ref_val = self.velocity_net.get_undamaged_ref_alpha()
         if alpha_ref_val is not None:
             self.log(
@@ -174,13 +177,38 @@ class CFMTrainingMixin:
                 on_step=True,
                 on_epoch=False,
             )
-            self.log(
-                "train/refiner_resid_std",
-                float(getattr(self, "_last_refiner_resid_std", 0.0)),
-                prog_bar=False,
-                on_step=True,
-                on_epoch=False,
-            )
+            if self.refiner_implicit or self.refiner_target_x1:
+                if self.refiner_implicit and not self.refiner_target_x1:
+                    self.log(
+                        "train/refiner_control_frac",
+                        float(getattr(self, "_last_refiner_control_frac", 0.0)),
+                        prog_bar=False,
+                        on_step=True,
+                        on_epoch=False,
+                    )
+                self.log(
+                    "train/refiner_fm_loss",
+                    float(getattr(self, "_last_fm_loss", 0.0)),
+                    prog_bar=False,
+                    on_step=True,
+                    on_epoch=False,
+                )
+                if float(self.refiner_tone_loss_weight) > 0.0:
+                    self.log(
+                        "train/refiner_tone_loss",
+                        float(getattr(self, "_last_refiner_tone_loss", 0.0)),
+                        prog_bar=False,
+                        on_step=True,
+                        on_epoch=False,
+                    )
+            else:
+                self.log(
+                    "train/refiner_resid_std",
+                    float(getattr(self, "_last_refiner_resid_std", 0.0)),
+                    prog_bar=False,
+                    on_step=True,
+                    on_epoch=False,
+                )
         if self.use_paired_bridge:
             self.log(
                 "train/bridge_frac",
@@ -226,7 +254,12 @@ class CFMTrainingMixin:
                 mask_combined = torch.maximum(mask_combined, condition_mask)
             elif mask_combined is None:
                 mask_combined = condition_mask
-            return self.refiner_residual_flow_matching_loss(
+            loss_fn = (
+                self.refiner_implicit_flow_matching_loss
+                if self.refiner_implicit or self.refiner_target_x1
+                else self.refiner_residual_flow_matching_loss
+            )
+            return loss_fn(
                 target_space_data,
                 ar_pack,
                 info,
@@ -460,7 +493,21 @@ class CFMTrainingMixin:
     def configure_optimizers(self):
         optimizer_name = getattr(self, "optimizer_name", "adamw")
         param_groups = []
-        if not getattr(self, "spall_mask_only", False):
+        if getattr(self, "refiner_implicit", False):
+            # Control branch at --lr; an unfrozen trunk at trunk_lr_mult * lr. Frozen params are left out.
+            named = [(n, p) for n, p in self.velocity_net.named_parameters() if p.requires_grad]
+            control = [p for n, p in named if n.startswith("control.")]
+            trunk = [p for n, p in named if not n.startswith("control.")]
+            param_groups.append({"params": control})
+            if trunk:
+                param_groups.append({"params": trunk, "lr": self.lr * float(self.trunk_lr_mult)})
+            print(
+                f"[CFM] optimizer: control {sum(p.numel() for p in control) / 1e6:.2f}M @ lr={self.lr:g}, "
+                f"trunk {sum(p.numel() for p in trunk) / 1e6:.2f}M @ lr={self.lr * float(self.trunk_lr_mult):g}"
+                f"{' (frozen)' if not trunk else ''}",
+                flush=True,
+            )
+        elif not getattr(self, "spall_mask_only", False):
             param_groups.append({"params": self.velocity_net.parameters()})
         if (
             getattr(self, "use_spall_growth_mask", False)

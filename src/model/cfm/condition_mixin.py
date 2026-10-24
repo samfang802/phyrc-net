@@ -198,6 +198,8 @@ class CFMConditionMixin:
                 "direction_prev2": batch.get("direction_prev2"),
                 "DI_prev2": batch.get("DI_prev2"),
                 "has_prev2": batch.get("has_prev2"),
+                "state_prev": batch.get("state_prev"),
+                "state_prev2": batch.get("state_prev2"),
             }
             return (
                 real_data,

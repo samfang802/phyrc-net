@@ -254,6 +254,105 @@ class AdaGNResBlock(nn.Module):
         return self.skip(x) + h
 
 
+class ControlBranch(nn.Module):
+    """ControlNet copy of the trunk encoder + mid (v10.5 implicit refiner).
+
+    Input is the trunk's own input (``z_t | coords | mask``) plus the hint ``S_{t-1}`` through a
+    zero-init conv. One zero-init 1x1 conv per trunk skip and one after mid, so a fresh branch
+    leaves the trunk output unchanged. ``Δg`` enters only here, as a zero-gated term on the cond.
+
+    ``hint_only`` (v10.6-C, nycu-project layout): the branch reads the hint alone through its own
+    ``in_conv``, has no mid, and is not copied from the trunk.
+    """
+
+    def __init__(
+        self, trunk, hint_channels, cond_dim, physics_dim=1024, use_delta_g=False, alpha_dim="scalar", hint_only=False
+    ):
+        super().__init__()
+        import copy
+
+        self.hint_only = bool(hint_only)
+        width = int(trunk.model_channels)
+        if self.hint_only:
+            self.in_conv = nn.Conv2d(int(hint_channels), width, kernel_size=3, padding=1)
+        else:
+            self.in_conv = copy.deepcopy(trunk.in_conv)
+        self.down_blocks = copy.deepcopy(trunk.down_blocks)
+        self.downsamples = copy.deepcopy(trunk.downsamples)
+        self.l2_vss = copy.deepcopy(trunk.l2_vss)
+        self.l3_vss = copy.deepcopy(trunk.l3_vss)
+        if not self.hint_only:
+            self.mid_block1 = copy.deepcopy(trunk.mid_block1)
+            self.mid_attn = copy.deepcopy(trunk.mid_attn)
+            self.mid_block2 = copy.deepcopy(trunk.mid_block2)
+        self.use_vss_l2 = trunk.use_vss_l2
+        self.use_vss_l3_u3 = trunk.use_vss_l3_u3
+        self.l2_level = trunk.l2_level
+        self.l3_level = trunk.l3_level
+
+        self.zero_convs = nn.ModuleList(
+            nn.Conv2d(blk.out_channels, blk.out_channels, kernel_size=1)
+            for blocks in self.down_blocks
+            for blk in blocks
+        )
+        zero_init = list(self.zero_convs)
+        if not self.hint_only:
+            self.hint_block = nn.Sequential(
+                nn.Conv2d(int(hint_channels), width, kernel_size=3, padding=1),
+                nn.SiLU(),
+                nn.Conv2d(width, width, kernel_size=3, padding=1),
+            )
+            mid_ch = int(self.mid_block2.out_channels)
+            self.zero_mid = nn.Conv2d(mid_ch, mid_ch, kernel_size=1)
+            zero_init += [self.hint_block[-1], self.zero_mid]
+        for conv in zero_init:
+            nn.init.zeros_(conv.weight)
+            nn.init.zeros_(conv.bias)
+
+        self.use_delta_g = bool(use_delta_g)
+        if self.use_delta_g:
+            # Same form as the V10 trunk branch: no norm, so the size of the change survives.
+            self.physics_linear_delta = nn.Linear(int(physics_dim), int(cond_dim), bias=False)
+            shape = (int(cond_dim),) if str(alpha_dim) == "vector" else (1,)
+            self.alpha_dg = nn.Parameter(torch.zeros(shape))
+
+    @torch.no_grad()
+    def copy_from_trunk(self, trunk):
+        """Encoder + mid weights of the (warm-started) trunk; zero convs and Δg stay zero."""
+        if self.hint_only:
+            raise ValueError("a hint-only control branch is trained from scratch, not copied")
+        for name in ("in_conv", "down_blocks", "downsamples", "l2_vss", "l3_vss", "mid_block1", "mid_attn", "mid_block2"):
+            getattr(self, name).load_state_dict(getattr(trunk, name).state_dict())
+
+    def forward(self, x, cond, hint, gru_delta=None):
+        """Returns (per-skip residuals in trunk skip order, mid residual or None when hint-only)."""
+        if self.use_delta_g and gru_delta is not None:
+            cond = cond + self.alpha_dg * self.physics_linear_delta(gru_delta)
+        if hint.shape[-2:] != x.shape[-2:]:
+            raise ValueError(f"control hint {tuple(hint.shape)} must match input {tuple(x.shape)}")
+        hint = hint.to(dtype=x.dtype)
+        h = self.in_conv(hint) if self.hint_only else self.in_conv(x) + self.hint_block(hint)
+        outs = []
+        k = 0
+        for i, blocks in enumerate(self.down_blocks):
+            for block in blocks:
+                h = block(h, cond)
+                if self.use_vss_l2 and i == self.l2_level:
+                    h = self.l2_vss(h)
+                if self.use_vss_l3_u3 and i == self.l3_level:
+                    h = self.l3_vss(h)
+                outs.append(self.zero_convs[k](h))
+                k += 1
+            if i < len(self.downsamples):
+                h = self.downsamples[i](h)
+        if self.hint_only:
+            return outs, None
+        h = self.mid_block1(h, cond)
+        h = self.mid_attn(h)
+        h = self.mid_block2(h, cond)
+        return outs, self.zero_mid(h)
+
+
 class ADMUNetCFM(nn.Module):
     def __init__(
         self,
@@ -284,6 +383,7 @@ class ADMUNetCFM(nn.Module):
         physics_adagn_dim=None,
         gated_fusion_alpha_dim="scalar",
         use_delta_g=False,
+        damage_scalar_dim=0,
         image_channels=None,
         self_cond_channels=0,
         use_undamaged_ref=False,
@@ -294,6 +394,11 @@ class ADMUNetCFM(nn.Module):
         freeu_s1=0.9,
         freeu_s2=0.2,
         freeu_r_thresh=0.25,
+        use_control_branch=False,
+        control_hint_channels=3,
+        control_delta_g=False,
+        control_inject_encoder=False,
+        control_hint_only=False,
     ):
         super().__init__()
         if use_split_conditioning and use_physics_adagn:
@@ -394,27 +499,37 @@ class ADMUNetCFM(nn.Module):
                 nn.Linear(cond_dim, cond_dim),
             )
             self.e_c_ln = nn.LayerNorm(cond_dim)
+            # v11: the last damage_scalar_dim entries of the physics vector are damage scalars with their
+            # own branch, h += alpha_d * LN(MLP(d)); the rest (encoder z) goes through physics_linear.
+            self.damage_scalar_dim = int(damage_scalar_dim)
+            g_dim = int(physics_dim) - self.damage_scalar_dim
             k = int(self.physics_bottleneck_dim)
-            if 0 < k < int(physics_dim):
+            if 0 < k < g_dim:
                 # 1024 → k → cond_dim; no skip (the point is to drop fine g axes).
                 # RMSNorm on k (not LN): keep axis offsets / energy ranking.
                 self.physics_linear = nn.Sequential(
-                    nn.LayerNorm(physics_dim),
-                    nn.Linear(physics_dim, k),
+                    nn.LayerNorm(g_dim),
+                    nn.Linear(g_dim, k),
                     RMSNorm(k),
                     nn.Linear(k, cond_dim),
                 )
             else:
-                self.physics_linear = nn.Linear(physics_dim, cond_dim)
+                self.physics_linear = nn.Linear(g_dim, cond_dim)
             self.e_g_ln = nn.LayerNorm(cond_dim)
             if self.gated_fusion_alpha_dim == "vector":
                 self.alpha = nn.Parameter(torch.zeros(cond_dim))
             else:
                 self.alpha = nn.Parameter(torch.zeros(1))
+            if self.damage_scalar_dim > 0:
+                self.damage_mlp = nn.Sequential(
+                    nn.Linear(self.damage_scalar_dim, 64), nn.SiLU(), nn.Linear(64, cond_dim)
+                )
+                self.e_d_ln = nn.LayerNorm(cond_dim)
+                self.alpha_d = nn.Parameter(torch.zeros(cond_dim if self.gated_fusion_alpha_dim == "vector" else 1))
             self.use_delta_g = bool(use_delta_g)
             if self.use_delta_g:
                 # h += alpha_dg * Linear(g_t - g_{t-1}). alpha_dg = 0 at init, no norm so the size of the change survives.
-                self.physics_linear_delta = nn.Linear(physics_dim, cond_dim, bias=False)
+                self.physics_linear_delta = nn.Linear(g_dim, cond_dim, bias=False)
                 if self.gated_fusion_alpha_dim == "vector":
                     self.alpha_dg = nn.Parameter(torch.zeros(cond_dim))
                 else:
@@ -579,6 +694,23 @@ class ADMUNetCFM(nn.Module):
         self.out_norm = nn.GroupNorm(_num_groups(ch), ch, eps=1e-6)
         self.out_conv = nn.Conv2d(ch, out_channels, kernel_size=3, padding=1)
 
+        # v10.5: ControlNet branch for the implicit refiner. Built last so it copies the final in_conv.
+        self.control_inject_encoder = bool(control_inject_encoder)
+        if use_control_branch:
+            if self.use_physics_cross_attn:
+                raise ValueError("use_control_branch does not copy the physics cross-attention")
+            self.control = ControlBranch(
+                self,
+                hint_channels=control_hint_channels,
+                cond_dim=cond_dim,
+                physics_dim=physics_dim,
+                use_delta_g=control_delta_g,
+                alpha_dim=self.gated_fusion_alpha_dim,
+                hint_only=control_hint_only,
+            )
+        else:
+            self.control = None
+
     def _build_cond(self, t, c, gru_feat=None, ref_feat=None, gru_delta=None):
         t_emb = sinusoidal_timestep_embedding(t, self.model_channels)
         t_emb = self.time_mlp(t_emb)
@@ -588,10 +720,17 @@ class ADMUNetCFM(nn.Module):
                 raise ValueError("gru_feat is required when use_split_conditioning=True")
             c_emb = self.scalar_mlp(c)
             e_c = self.e_c_ln(self.joint_mlp(t_emb + c_emb))
+            d = getattr(self, "damage_scalar_dim", 0)
+            if d > 0:
+                damage_feat, gru_feat = gru_feat[:, -d:], gru_feat[:, :-d]
+                if gru_delta is not None:
+                    gru_delta = gru_delta[:, :-d]
             # Physics AdaGN branch: e_g = LayerNorm_2(Linear_g(g))
             e_g = self.e_g_ln(self.physics_linear(gru_feat))
             # Zero-init gated fusion: h_cond = e_c + alpha * e_g
             h = e_c + self.alpha * e_g
+            if d > 0:
+                h = h + self.alpha_d * self.e_d_ln(self.damage_mlp(damage_feat))
             if getattr(self, "use_delta_g", False) and gru_delta is not None:
                 h = h + self.alpha_dg * self.physics_linear_delta(gru_delta)
             if self.use_undamaged_ref:
@@ -629,6 +768,11 @@ class ADMUNetCFM(nn.Module):
         if not self.use_split_conditioning or not hasattr(self, "alpha"):
             return None
         return self.alpha.detach().float().mean()
+
+    def get_damage_alpha(self):
+        if getattr(self, "damage_scalar_dim", 0) <= 0:
+            return None
+        return self.alpha_d.detach().float().mean()
 
     def get_undamaged_ref_alpha(self):
         if not self.use_undamaged_ref or self.alpha_ref is None:
@@ -727,7 +871,19 @@ class ADMUNetCFM(nn.Module):
             state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
         )
 
-    def forward(self, z_t, t, c, gru_feat=None, damage_mask=None, return_attn_map=False, ref_feat=None, gru_delta=None):
+    def forward(
+        self,
+        z_t,
+        t,
+        c,
+        gru_feat=None,
+        damage_mask=None,
+        return_attn_map=False,
+        ref_feat=None,
+        gru_delta=None,
+        control_hint=None,
+        control_scale=None,
+    ):
         """
         Dual-Track OT-CFM U-Net velocity prediction.
 
@@ -735,10 +891,15 @@ class ADMUNetCFM(nn.Module):
         Track B — Cross-Attn (optional): pixels query physics tokens at mid / U3 / U2.
 
         Skip path: plain concat at all decoder stages.
+        Control branch (v10.5): with ``control_hint``, residuals from ``self.control`` are added to
+        the decoder skips (default) or to the encoder features before they become skips
+        (``control_inject_encoder``), and to the mid output. ``control_scale`` [B] or float scales
+        them (0 = trunk only). Without a hint the trunk runs alone.
         Returns ``final_out`` [B, out_channels, H, W], or ``(final_out, attn_maps)``
         when ``return_attn_map=True``.
         """
-        cond = self._build_cond(t, c, gru_feat=gru_feat, ref_feat=ref_feat, gru_delta=gru_delta)
+        trunk_delta = gru_delta if getattr(self, "use_delta_g", False) else None
+        cond = self._build_cond(t, c, gru_feat=gru_feat, ref_feat=ref_feat, gru_delta=trunk_delta)
         physics_tokens = self._build_physics_tokens(gru_feat) if self.use_physics_cross_attn else None
         if self.use_damage_mask_condition:
             if damage_mask is None:
@@ -752,10 +913,22 @@ class ADMUNetCFM(nn.Module):
                     damage_mask, size=z_t.shape[-2:], mode="nearest"
                 )
             z_t = torch.cat([z_t, damage_mask], dim=1)
+        ctrl_skips, ctrl_mid = None, None
+        if control_hint is not None:
+            if self.control is None:
+                raise ValueError("control_hint given but the net has no control branch")
+            ctrl_skips, ctrl_mid = self.control(z_t, cond, control_hint, gru_delta=gru_delta)
+            if control_scale is not None:
+                s = control_scale
+                if torch.is_tensor(s) and s.ndim > 0:
+                    s = s.to(dtype=ctrl_skips[0].dtype).view(-1, 1, 1, 1)
+                ctrl_skips = [r * s for r in ctrl_skips]
+                ctrl_mid = None if ctrl_mid is None else ctrl_mid * s
         h = self.in_conv(z_t)
         skips = []
         attn_maps = {}
 
+        k = 0
         for i, blocks in enumerate(self.down_blocks):
             for block in blocks:
                 h = block(h, cond)
@@ -763,6 +936,9 @@ class ADMUNetCFM(nn.Module):
                     h = self.l2_vss(h)  # doc L2 @ P/4
                 if self.use_vss_l3_u3 and i == self.l3_level:
                     h = self.l3_vss(h)
+                if ctrl_skips is not None and self.control_inject_encoder:
+                    h = h + ctrl_skips[k]
+                k += 1
                 skips.append(h)
             if i < len(self.downsamples):
                 h = self.downsamples[i](h)
@@ -777,11 +953,15 @@ class ADMUNetCFM(nn.Module):
                 attn_maps["mid"] = self.mid_cross_attn.last_attn
                 self.mid_cross_attn.store_attn = False
         h = self.mid_block2(h, cond)
+        if ctrl_mid is not None:
+            h = h + ctrl_mid
 
         upsample_idx = 0
         for i, blocks in enumerate(self.up_blocks):
             for block in blocks:
                 skip = skips.pop()
+                if ctrl_skips is not None and not self.control_inject_encoder:
+                    skip = skip + ctrl_skips.pop()
                 if self.use_freeu:
                     b_l, s_l = freeu_params_for_stage(
                         i, self.freeu_b1, self.freeu_b2, self.freeu_s1, self.freeu_s2
