@@ -118,10 +118,69 @@ def _load_velocity_init_with_state_channels(model, ckpt_path, zero_out=True):
         print("[train_mixed] Refiner out_conv zero-initialised (initial velocity 0)", flush=True)
 
 
+def _load_velocity_init_with_control(model, ckpt_path):
+    """v10.5 warm start: the single-frame checkpoint is the trunk as is (no extra input channels);
+    the control branch copies its encoder + mid, and its zero convs / Δg gate stay zero, so the
+    initial model is exactly the single-frame model."""
+    os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
+    torch.serialization.add_safe_globals([np._core.multiarray.scalar])
+    payload = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    state = payload.get("state_dict", payload)
+    prefix = "velocity_net."
+    sub = {key[len(prefix):]: value for key, value in state.items() if key.startswith(prefix)}
+    missing, unexpected = model.velocity_net.load_state_dict(sub, strict=False)
+    stray = [k for k in missing if not k.startswith("control.")]
+    if stray or unexpected:
+        raise KeyError(f"warm start mismatch: missing={stray} unexpected={list(unexpected)}")
+    net = model.velocity_net
+    if net.control.hint_only:
+        branch = "control branch fresh (nycu layout: hint only, no mid)"
+    else:
+        net.control.copy_from_trunk(net)
+        branch = "control branch copied from its encoder+mid"
+    if model.refiner_target_x1:
+        # v10.6: drop gn's single-frame output, as F does.
+        with torch.no_grad():
+            net.out_conv.weight.zero_()
+            net.out_conv.bias.zero_()
+        branch += "; out_conv zeroed"
+    print(
+        f"[train_mixed] Loaded trunk from {ckpt_path} tensors={len(sub)}; {branch} "
+        f"(inject={'encoder' if model.control_inject_encoder else 'decoder'}, freeze_trunk={model.freeze_trunk})",
+        flush=True,
+    )
+
+
+class PeriodicKID(pl.Callback):
+    """Every N steps: generate the val split and log DINOv3 KID + exposure stats (src/metrics/train_kid.py)."""
+
+    def __init__(self, dataset, every_n_steps, k, image_dir):
+        super().__init__()
+        from src.metrics.train_kid import PeriodicKIDRunner
+
+        self.every_n_steps = max(1, int(every_n_steps))
+        self.runner = PeriodicKIDRunner(dataset, k, image_dir)
+        self._last_step = -1
+
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        step = int(trainer.global_step)
+        if step <= 0 or step % self.every_n_steps != 0 or step == self._last_step:
+            return
+        self._last_step = step
+        from src.metrics.train_kid import append_log, kid_log_path
+
+        stats = self.runner(pl_module)
+        append_log(kid_log_path(pl_module.result_dir), {"step": step, "k": self.runner.k, **stats})
+        if trainer.logger is not None:
+            trainer.logger.log_metrics({f"val/{k}": v for k, v in stats.items()}, step=step)
+
+
 def _load_spall_g_init(model, args):
     velocity_init = str(getattr(args, "velocity_init", "") or "").strip()
     mask_ckpt = str(getattr(args, "spall_mask_ckpt", "") or "").strip()
-    if velocity_init and bool(getattr(args, "use_refiner_residual", False)):
+    if velocity_init and bool(getattr(args, "refiner_implicit", False)):
+        _load_velocity_init_with_control(model, velocity_init)
+    elif velocity_init and bool(getattr(args, "use_refiner_residual", False)):
         _load_velocity_init_with_state_channels(
             model, velocity_init, zero_out=bool(getattr(args, "refiner_zero_init_out", True))
         )
@@ -485,6 +544,22 @@ if __name__ == "__main__":
         f"[train_mixed] Trainable params: {sum(p.numel() for p in model.parameters() if p.requires_grad)/1024/1024:.4f} MB",
         flush=True,
     )
+    if bool(getattr(args, "refiner_state_cache", False)):
+        # Before the loader workers fork: they read the cache from the parent's memory.
+        from src.model.cfm.refiner_cache import load_or_build_state_cache
+
+        train_ds.attach_state_cache(
+            load_or_build_state_cache(model, train_ds, int(args.refiner_state_cache_n), device)
+        )
+    if int(getattr(args, "kid_every_n_steps", 0)) > 0:
+        callback_list.append(
+            PeriodicKID(val_ds, args.kid_every_n_steps, args.kid_k, args.kid_image_dir)
+        )
+        print(
+            f"[train_mixed] Periodic KID every {args.kid_every_n_steps} steps on {len(val_ds.label)} val frames, "
+            f"K={args.kid_k}, reference {args.kid_image_dir}",
+            flush=True,
+        )
 
     logger = pl.loggers.CSVLogger(save_dir=args.result_dir, name="csv_logs")
     if args.use_wandb:

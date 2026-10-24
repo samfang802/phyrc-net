@@ -36,6 +36,28 @@ AUG_ERASE_SCALE_MAX=0.15
 AUG_ERASE_RATIO_MIN=0.5
 AUG_ERASE_RATIO_MAX=2.5
 
+# v11 refiner (docs/ARCHITECTURE_UPDATE_V11.md §8 next step): 10.6-C with the v11 condition
+# ([encoder z | 4 damage scalars], loading sign, flip keeps the face) and a v11 base. The base is the
+# warm start, the state cache source and frame 0 at inference. Δ[z | scalars] goes to the control branch.
+V11="${V11:-False}"
+V11_ARGS=()
+if [[ "${V11}" == "True" ]]; then
+    V11_ENCODER="${V11_ENCODER:-results/DamageStateEncoder/A_info/2026-10-23_22-34-47}"
+    REFINER_BASE_DIR="${REFINER_BASE_DIR:-results/DamagePatternGeneration/CFMADM/2026-10-24_12-36-59_v11}"
+    REFINER_BASE_CKPT="${REFINER_BASE_CKPT:-${REFINER_BASE_DIR}/checkpoint_step_012000.pt}"
+    VELOCITY_INIT="${VELOCITY_INIT:-${REFINER_BASE_CKPT}}"
+    REFINER_TARGET_X1="${REFINER_TARGET_X1:-True}"
+    REFINER_IMPLICIT="${REFINER_IMPLICIT:-True}"
+    CONTROL_HINT_ONLY="${CONTROL_HINT_ONLY:-True}"
+    CONTROL_INJECT_ENCODER="${CONTROL_INJECT_ENCODER:-True}"
+    TRUNK_LR_MULT="${TRUNK_LR_MULT:-1.0}"
+    RUN_TAG="${RUN_TAG:-v11_refiner}"
+    export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}" MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"   # 2 CPUs per job
+    V11_ARGS=(--damage_condition_encoder "${V11_ENCODER}" --damage_scalar_dim 4 \
+              --load_sign_condition True --flip_keeps_direction True)
+    echo "[train_ADMCFM] V11 refiner: encoder=${V11_ENCODER} base=${REFINER_BASE_CKPT}"
+fi
+
 NUM_WORKERS="${NUM_WORKERS:-2}"
 # 4 CPUs: main process + 2 loader workers (1 thread each). Keep BLAS/OpenMP small.
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-2}" MKL_NUM_THREADS="${MKL_NUM_THREADS:-2}"
@@ -76,6 +98,44 @@ REFINER_BASE_DIR="${REFINER_BASE_DIR:-results/DamagePatternGeneration/CFMADM/102
 REFINER_BASE_CKPT="${REFINER_BASE_CKPT:-${REFINER_BASE_DIR}/Opensees Based damage Patterns Generation/chjqbp9m/checkpoints/last.ckpt}"
 REFINER_ROLL_PROB="${REFINER_ROLL_PROB:-0.15}"
 REFINER_ROLL_NFE="${REFINER_ROLL_NFE:-10}"
+# v10.5 implicit refiner (docs/ARCHITECTURE_UPDATE_V10_5.md): S_{t-1} through a ControlNet branch,
+# the net generates x_t. Same script for both versions, only two switches differ:
+#   10.5-A: CONTROL_INJECT_ENCODER=False FREEZE_TRUNK=True   (decoder skips, frozen gn trunk)
+#   10.5-B: CONTROL_INJECT_ENCODER=True  FREEZE_TRUNK=False  (encoder features, trunk at TRUNK_LR_MULT x lr)
+# Everything else (state cache, perturbation, shared augmentation, tone loss, low-frequency noise
+# sharing, roll prob, steps) follows REFINER_IMPLICIT so A and B stay matched.
+# v10.6 (docs/ARCHITECTURE_UPDATE_V10_6.md): REFINER_TARGET_X1=True keeps S_{t-1} concatenated
+# (V10 layout) but generates x_t, with the same exposure package and no single-frame task.
+#   10.6-F: REFINER_TARGET_X1=True                         (gn weights, zeroed out_conv)
+#   10.6-S: REFINER_TARGET_X1=True REFINER_FROM_SCRATCH=True (random init)
+#   10.6-C: REFINER_TARGET_X1=True REFINER_IMPLICIT=True CONTROL_HINT_ONLY=True CONTROL_INJECT_ENCODER=True TRUNK_LR_MULT=1.0
+#           (F, but S_{t-1} goes through a fresh nycu-project control branch instead of the input channels)
+REFINER_IMPLICIT="${REFINER_IMPLICIT:-False}"
+REFINER_TARGET_X1="${REFINER_TARGET_X1:-False}"
+REFINER_FROM_SCRATCH="${REFINER_FROM_SCRATCH:-False}"
+REFINER_X1=False
+if [[ "${REFINER_IMPLICIT}" == "True" || "${REFINER_TARGET_X1}" == "True" ]]; then
+    REFINER_X1=True
+fi
+CONTROL_INJECT_ENCODER="${CONTROL_INJECT_ENCODER:-False}"
+CONTROL_HINT_ONLY="${CONTROL_HINT_ONLY:-False}"
+FREEZE_TRUNK="${FREEZE_TRUNK:-False}"
+TRUNK_LR_MULT="${TRUNK_LR_MULT:-0.2}"
+REFINER_CONTROL_DROP_PROB="${REFINER_CONTROL_DROP_PROB:-0.15}"
+REFINER_STATE_CACHE="${REFINER_STATE_CACHE:-${REFINER_X1}}"
+REFINER_STATE_CACHE_N="${REFINER_STATE_CACHE_N:-4}"
+REFINER_STATE_PERTURB="${REFINER_STATE_PERTURB:-${REFINER_X1}}"
+SHARE_PHOTOMETRIC_AUG="${SHARE_PHOTOMETRIC_AUG:-${REFINER_X1}}"
+REFINER_SHARED_LOWFREQ_NOISE="${REFINER_SHARED_LOWFREQ_NOISE:-${REFINER_X1}}"
+KID_EVERY_N_STEPS="${KID_EVERY_N_STEPS:-3000}"
+KID_K="${KID_K:-8}"
+if [[ "${REFINER_X1}" == "True" ]]; then
+    REFINER_ROLL_PROB="${REFINER_ROLL_PROB_IMPLICIT:-0.3}"
+    REFINER_TONE_LOSS_WEIGHT="${REFINER_TONE_LOSS_WEIGHT:-1.0}"
+    MAX_STEPS="${MAX_STEPS:-15000}"
+else
+    REFINER_TONE_LOSS_WEIGHT="${REFINER_TONE_LOSS_WEIGHT:-0.0}"
+fi
 if [[ "${USE_PAIRED_BRIDGE}" == "True" || "${USE_PAIRED_BRIDGE}" == "true" || "${USE_PAIRED_BRIDGE}" == "1" || "${USE_REFINER_RESIDUAL}" == "True" ]]; then
     USE_SPALL_GROWTH_MASK=False
     FREEZE_SPALL_MASK=False
@@ -83,6 +143,9 @@ if [[ "${USE_PAIRED_BRIDGE}" == "True" || "${USE_PAIRED_BRIDGE}" == "true" || "$
     SPALL_SOFT_PAINT=False
     if [[ -z "${VELOCITY_INIT}" ]]; then
         VELOCITY_INIT="results/DamagePatternGeneration/CFMADM/1024-dadaGNsplit/chjqbp9m_last.ckpt"
+    fi
+    if [[ "${REFINER_FROM_SCRATCH}" == "True" ]]; then
+        VELOCITY_INIT=""
     fi
 fi
 if [[ "${USE_SPALL_GROWTH_MASK}" != "True" && "${USE_SPALL_GROWTH_MASK}" != "true" && "${USE_SPALL_GROWTH_MASK}" != "1" ]]; then
@@ -200,6 +263,7 @@ echo "[train_ADMCFM] PHYSICS_BOTTLENECK_DIM=${PHYSICS_BOTTLENECK_DIM} G_PCA_DIM=
 echo "[train_ADMCFM] IMAGE_SIZE=${IMAGE_SIZE} BATCH_SIZE=${BATCH_SIZE} CFM_MODEL_CHANNELS=${CFM_MODEL_CHANNELS} CFM_COND_DIM=${CFM_COND_DIM}"
 echo "[train_ADMCFM] MAX_STEPS=${MAX_STEPS} WARMUP_STEPS=${WARMUP_STEPS} VAL_CHECK_INTERVAL=${VAL_CHECK_INTERVAL} NUM_WORKERS=${NUM_WORKERS}"
 echo "[train_ADMCFM] RUN_TAG=${RUN_TAG:-<none>} NUM_WORKERS=${NUM_WORKERS} PAIRED_BRIDGE=${USE_PAIRED_BRIDGE} BRIDGE_NOISE_MAX=${PAIRED_BRIDGE_NOISE_MAX} SPALL_COND_PROB=${SPALL_COND_PROB} SPALL_SOFT_PAINT=${SPALL_SOFT_PAINT} LOCK_HEALTHY=${SPALL_LOCK_HEALTHY} HEALTHY_MARGIN=${SPALL_HEALTHY_MARGIN} CTX_NOISE_MAX=${SPALL_CTX_NOISE_MAX} SPALL_MASK_ONLY=${SPALL_MASK_ONLY} FREEZE_SPALL_MASK=${FREEZE_SPALL_MASK} VELOCITY_INIT=${VELOCITY_INIT:-<empty>}"
+echo "[train_ADMCFM] REFINER_IMPLICIT=${REFINER_IMPLICIT} REFINER_TARGET_X1=${REFINER_TARGET_X1} FROM_SCRATCH=${REFINER_FROM_SCRATCH} CONTROL_INJECT_ENCODER=${CONTROL_INJECT_ENCODER} HINT_ONLY=${CONTROL_HINT_ONLY} FREEZE_TRUNK=${FREEZE_TRUNK} TRUNK_LR_MULT=${TRUNK_LR_MULT} CONTROL_DROP=${REFINER_CONTROL_DROP_PROB} STATE_CACHE=${REFINER_STATE_CACHE} STATE_PERTURB=${REFINER_STATE_PERTURB} SHARE_PHOTO_AUG=${SHARE_PHOTOMETRIC_AUG} LOWFREQ_NOISE=${REFINER_SHARED_LOWFREQ_NOISE} TONE_W=${REFINER_TONE_LOSS_WEIGHT} ROLL_PROB=${REFINER_ROLL_PROB} KID_EVERY=${KID_EVERY_N_STEPS} KID_K=${KID_K}"
 echo "[train_ADMCFM] val_anchor=${INFERENCE_VAL_ANCHOR_EXP} train_anchor=${INFERENCE_TRAIN_ANCHOR_EXP}"
 echo "[train_ADMCFM] FIXED_DI_VALUES=${FIXED_DI_VALUES}"
 python3 - <<'PY'
@@ -256,6 +320,14 @@ fi
         --refiner_roll_prob "${REFINER_ROLL_PROB}" --refiner_roll_nfe "${REFINER_ROLL_NFE}" \
         --use_refiner_residual "${USE_REFINER_RESIDUAL}" --refiner_chain_prob "${REFINER_CHAIN_PROB}" \
         --refiner_state_noise_max "${REFINER_STATE_NOISE_MAX}" --cache_data "${CACHE_DATA}" --use_delta_g "${USE_DELTA_G}" \
+        --refiner_implicit "${REFINER_IMPLICIT}" --refiner_target_x1 "${REFINER_TARGET_X1}" --control_inject_encoder "${CONTROL_INJECT_ENCODER}" \
+        --control_hint_only "${CONTROL_HINT_ONLY}" \
+        --freeze_trunk "${FREEZE_TRUNK}" --trunk_lr_mult "${TRUNK_LR_MULT}" \
+        --refiner_control_drop_prob "${REFINER_CONTROL_DROP_PROB}" \
+        --refiner_state_cache "${REFINER_STATE_CACHE}" --refiner_state_cache_n "${REFINER_STATE_CACHE_N}" \
+        --refiner_state_perturb "${REFINER_STATE_PERTURB}" --refiner_tone_loss_weight "${REFINER_TONE_LOSS_WEIGHT}" \
+        --share_photometric_aug "${SHARE_PHOTOMETRIC_AUG}" --refiner_shared_lowfreq_noise "${REFINER_SHARED_LOWFREQ_NOISE}" \
+        --kid_every_n_steps "${KID_EVERY_N_STEPS}" --kid_k "${KID_K}" \
         --use_spall_growth_mask "${USE_SPALL_GROWTH_MASK}" \
         --spall_mask_grid "${SPALL_MASK_GRID}" \
         --spall_shift_px "${SPALL_SHIFT_PX}" \
@@ -281,6 +353,7 @@ fi
         --spall_ctx_noise_max "${SPALL_CTX_NOISE_MAX}" \
         --spall_mask_ckpt "${SPALL_MASK_CKPT}" \
         --velocity_init "${VELOCITY_INIT}" \
+        "${V11_ARGS[@]}" \
         --gated_fusion_alpha_dim "${GATED_FUSION_ALPHA_DIM}" \
         --use_physics_cross_attn "${USE_PHYSICS_CROSS_ATTN}" \
         --cfm_physics_num_tokens "${CFM_PHYSICS_NUM_TOKENS}" \

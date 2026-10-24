@@ -1,12 +1,13 @@
 #!/bin/bash
-#PBS -l select=1:ncpus=2:mem=15gb:gpu_id=2
+#PBS -l select=1:ncpus=2:mem=15gb:gpu_id=6
 #PBS -l place=shared
-#PBS -o log/train_g_prob.out
-#PBS -e log/train_g_prob.err
-#PBS -N CFM_oracle
+#PBS -o log/train_v11.out
+#PBS -e log/train_v11.err
+#PBS -N CFM_v11
 
-# Same Linear(1024→128) split AdaGN, plus train-only 10% g=0 CFG dropout.
-# Does not drop patch XY. Resume-compatible with no-drop Linear ckpt (same arch).
+# Single-frame generator (gn recipe). Default: v11 (docs/ARCHITECTURE_UPDATE_V11.md), so
+#   qsub job/DamagePatternGeneration/train_ADMCFM.sh
+# trains v11 from scratch. V11=False gives the previous GRU-conditioned recipe.
 
 cd "${PBS_O_WORKDIR:-$HOME/intership-project}"
 source job/DamagePatternGeneration/common.sh
@@ -36,6 +37,15 @@ AUG_ERASE_SCALE_MAX=0.15
 AUG_ERASE_RATIO_MIN=0.5
 AUG_ERASE_RATIO_MAX=2.5
 
+# v11 (docs/ARCHITECTURE_UPDATE_V11.md): V11=True conditions on the damage-state encoder instead of the GRU
+# (z through the alpha gate, 4 damage scalars through alpha_d), adds the loading sign to the face one-hot,
+# keeps the face label under horizontal flip, and trains from scratch. Everything else is the gn recipe.
+V11="${V11:-True}"
+if [[ "${V11}" == "True" ]]; then
+    NUM_WORKERS="${NUM_WORKERS:-2}"   # 2 CPUs per job
+    RUN_TAG="${RUN_TAG:-v11}"
+    export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}" MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
+fi
 NUM_WORKERS="${NUM_WORKERS:-2}"
 RUN_TAG="${RUN_TAG:-}"
 COND_PERTURB_DIST=uniform
@@ -158,6 +168,15 @@ if [[ ! -f "${EXTRACTOR_PATH}/best.ckpt" || ! -f "${EXTRACTOR_PATH}/args.json" ]
 fi
 
 # Fresh run: M now predicts accumulated extent, so the old incremental head is the wrong function.
+V11_ENCODER="${V11_ENCODER:-results/DamageStateEncoder/A_info/2026-10-23_22-34-47}"
+V11_ARGS=()
+if [[ "${V11}" == "True" ]]; then
+    RESUME_CKPT="${RESUME_CKPT:-none}"
+    V11_ARGS=(--load_sign_condition True --flip_keeps_direction True)
+    # V11_ENCODER=none: ablation that keeps the GRU g and only adds the loading sign + flip fix.
+    [[ "${V11_ENCODER}" != "none" ]] && V11_ARGS+=(--damage_condition_encoder "${V11_ENCODER}" --damage_scalar_dim 4)
+    echo "[train_ADMCFM] V11: encoder=${V11_ENCODER} load_sign=True flip_keeps_direction=True"
+fi
 RESUME_CKPT="${RESUME_CKPT:-results/DamagePatternGeneration/CFMADM/2026-10-17_17-13-26/Opensees Based damage Patterns Generation/41syx1zf/checkpoints/last.ckpt}"
 [[ "${RESUME_CKPT}" == "none" ]] && RESUME_CKPT=""   # RESUME_CKPT=none: start from scratch
 if [[ -n "${RESUME_CKPT}" ]]; then
@@ -223,6 +242,7 @@ fi
 "${NICE_CMD[@]}" python3 -u train_mixed.py --lr 1e-4 --epoch 3000 --batch_size "${BATCH_SIZE}" --num_workers "${NUM_WORKERS}" --run_tag "${RUN_TAG}" --train_virtual_repeat 100 --max_steps "${MAX_STEPS}" --warmup_steps "${WARMUP_STEPS}" --val_check_interval "${VAL_CHECK_INTERVAL}" --architecture CFMADM --loss_type CFMADM --data_path "${DATA_PATH}" \
         --extractor_path "${EXTRACTOR_PATH}" --use_wandb \
         "${RESUME_ARGS[@]}" \
+        "${V11_ARGS[@]}" \
         --img_aug \
         --use_grayscale_input "${USE_GRAYSCALE_INPUT}" \
         --use_clahe "${USE_CLAHE}" --clahe_clip_limit "${CLAHE_CLIP_LIMIT}" \

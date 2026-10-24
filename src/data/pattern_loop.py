@@ -49,6 +49,26 @@ class PatternLoopDataset(Dataset):
         self.hysteresis = {}
         self.result_dir = result_dir
         self.hidden_state = self.get_hidden_state(extractor, self.exp_list, result_dir=result_dir)
+        # v11 (docs/ARCHITECTURE_UPDATE_V11.md): the generator condition comes from the damage-state
+        # encoder instead of the GRU: [z | 4 damage scalars] per timestep, same indexing as the GRU state.
+        self.damage_condition_encoder = str(kwargs.get("damage_condition_encoder", "") or "")
+        if self.damage_condition_encoder:
+            from .damage_condition import build_frame_conditions
+
+            self.hidden_state = build_frame_conditions(
+                self.damage_condition_encoder, self.exp_list, root=os.path.join(self.root, "Hysteresis")
+            )
+            dims = {e: tuple(v.shape) for e, v in self.hidden_state.items()}
+            print(f"[PatternLoopDataset] damage-state condition from {self.damage_condition_encoder}: {dims}", flush=True)
+        # v11: loading sign of the frame (+1 / -1 / 0) appended to the face one-hot.
+        self.load_sign_condition = bool(kwargs.get("load_sign_condition", False))
+        if self.load_sign_condition:
+            from .damage_condition import load_signs
+
+            self._load_signs = load_signs(self.exp_list, root=os.path.join(self.root, "Hysteresis"))
+        # v11: the photographed faces are the two faces normal to the loading direction, so a
+        # horizontal flip is an in-plane mirror: it changes neither the face nor the loading sign.
+        self.flip_keeps_direction = bool(kwargs.get("flip_keeps_direction", False))
         self.use_loss_mask = bool(kwargs.get("use_loss_mask", False))
         self.mask_dir = os.path.join(self.root, "DamagePattern", "mask")
         self.use_object_loss_mask = bool(kwargs.get("use_object_loss_mask", True))
@@ -65,6 +85,9 @@ class PatternLoopDataset(Dataset):
         )
         # Refiner chain training also needs the frame before the previous one.
         self.use_prev2 = bool(kwargs.get("use_refiner_residual", False))
+        # v10.5: one photometric draw for all frames of a sample; offline base states (attach_state_cache).
+        self.share_photometric_aug = bool(kwargs.get("share_photometric_aug", False)) and self.mode == "train"
+        self._state_cache = None
         self._prev_iloc = self._build_prev_iloc_map() if self.use_ar_temporal_pairing else None
         self._missing_object_mask = set()
         self.image_size = int(kwargs.get("image_size", 128))
@@ -372,13 +395,16 @@ class PatternLoopDataset(Dataset):
             self._mask_cache[cache_key] = valid_mask.clone()
         return valid_mask
 
-    def _direction_to_tensor(self, direction, flipped=False):
+    def _direction_to_tensor(self, direction, flipped=False, exp=None, timestep=None):
         if direction == "Pull":
             direction_tensor = torch.FloatTensor([0.0, 1.0])
         else:
             direction_tensor = torch.FloatTensor([1.0, 0.0])
-        if flipped:
+        if flipped and not self.flip_keeps_direction:
             direction_tensor = torch.flip(direction_tensor, dims=(0,))
+        if self.load_sign_condition:
+            sign = float(self._load_signs[exp][int(timestep)])
+            direction_tensor = torch.cat([direction_tensor, torch.FloatTensor([sign])])
         return direction_tensor
 
     def _maybe_flip_info(self, info, flipped):
@@ -410,8 +436,29 @@ class PatternLoopDataset(Dataset):
             return torch.ones((1, image.shape[-2], image.shape[-1]), dtype=image.dtype)
         return torch.ones((1, image.shape[-2], image.shape[-1]), dtype=image.dtype)
 
-    def _load_frame(self, filename, exp, direction, timestep, DI, force_flip=None, apply_random_erasing=True):
-        """Load one damage frame (image + GRU + masks). Shared flip via force_flip."""
+    def attach_state_cache(self, states):
+        """``states``: {filename: (n, 1, H, W) tensor} of frozen-base samples, model units.
+
+        Call before the DataLoader workers start. Each item then carries ``state_prev`` /
+        ``state_prev2``: one random cached sample of that frame, flipped with the sample.
+        """
+        missing = [f for f in self.label["filename"].tolist() if f not in states]
+        if missing:
+            raise KeyError(f"state cache lacks {len(missing)} frames of the {self.mode} split, e.g. {missing[:3]}")
+        self._state_cache = states
+
+    def _cached_state(self, filename, flipped):
+        bank = self._state_cache[filename]
+        x = bank[int(torch.randint(0, bank.shape[0], ()).item())].float()
+        if flipped:
+            x = torch.flip(x, dims=(-1,))
+        return x.expand(3, -1, -1).contiguous()
+
+    def _load_frame(
+        self, filename, exp, direction, timestep, DI, force_flip=None, apply_random_erasing=True, photo_rng=None
+    ):
+        """Load one damage frame (image + GRU + masks). Shared flip via force_flip, shared
+        photometric draw via photo_rng (a torch RNG state)."""
         prefixed = self._prefix_cache.get(filename)
         image = prefixed.clone() if prefixed is not None else self._open_image(filename)
         info = self._info_for_exp(exp)
@@ -427,6 +474,7 @@ class PatternLoopDataset(Dataset):
                 force_flip=force_flip,
                 apply_random_erasing=apply_random_erasing,
                 **({"image_is_prefixed": True} if prefixed is not None else {}),
+                **({"rng_state": photo_rng} if photo_rng is not None else {}),
             )
         except TypeError:
             # Transforms without AR kwargs (legacy call sites).
@@ -456,7 +504,7 @@ class PatternLoopDataset(Dataset):
             loss_mask = loss_mask * valid_mask
 
         DI = torch.FloatTensor([float(DI)])
-        direction_tensor = self._direction_to_tensor(direction, flipped=flipped)
+        direction_tensor = self._direction_to_tensor(direction, flipped=flipped, exp=exp, timestep=timestep)
         info = self._maybe_flip_info(info, flipped)
         hidden_state, info, DI = self._maybe_perturb_conditions(hidden_state, info, DI)
         hidden_state = self._apply_g_pca(hidden_state)
@@ -508,7 +556,8 @@ class PatternLoopDataset(Dataset):
             return self._pack_legacy_tuple(sample)
 
         # --- Temporal AR pack: target + previous frame (shared H-flip) ---
-        target = self._load_frame(filename, exp, direction, timestep, DI)
+        photo_rng = torch.get_rng_state() if self.share_photometric_aug else None
+        target = self._load_frame(filename, exp, direction, timestep, DI, photo_rng=photo_rng)
         force_flip = bool(target["flipped"])
         prev_idx = int(self._prev_iloc[real_idx])
         has_prev = prev_idx >= 0
@@ -522,6 +571,7 @@ class PatternLoopDataset(Dataset):
                 p_DI,
                 force_flip=force_flip,
                 apply_random_erasing=False,
+                photo_rng=photo_rng,
             )
         else:
             # First frame placeholder: reuse target tensors; training will force-drop self_cond.
@@ -553,6 +603,7 @@ class PatternLoopDataset(Dataset):
                     q_DI,
                     force_flip=force_flip,
                     apply_random_erasing=False,
+                    photo_rng=photo_rng,
                 )
             else:
                 prev2 = prev
@@ -597,6 +648,15 @@ class PatternLoopDataset(Dataset):
             out["direction_prev2"] = prev2["direction"]
             out["DI_prev2"] = prev2["DI"]
             out["has_prev2"] = torch.tensor(1.0 if has_prev2 else 0.0, dtype=torch.float32)
+        if self._state_cache is not None:
+            flipped = bool(target["flipped"])
+            state_prev = (
+                self._cached_state(p_filename, flipped)
+                if has_prev
+                else torch.zeros_like(target["image"])
+            )
+            out["state_prev"] = state_prev
+            out["state_prev2"] = self._cached_state(q_filename, flipped) if has_prev2 else state_prev
         return out
 
 

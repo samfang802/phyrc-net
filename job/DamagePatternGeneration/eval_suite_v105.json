@@ -1,0 +1,25 @@
+{
+  "out_dir": "results/eval_suite/v105",
+  "splits": [
+    "test",
+    "val"
+  ],
+  "k": 8,
+  "baseline": "v105A",
+  "dino_model": "facebook/dinov3-vits16-pretrain-lvd1689m",
+  "extra_dino_models": [
+    "facebook/dinov2-small"
+  ],
+  "models": [
+    {
+      "name": "v105A",
+      "result_dir": "results/DamagePatternGeneration/CFMADM/2026-10-22_12-32-16_v105A",
+      "checkpoint": "results/DamagePatternGeneration/CFMADM/2026-10-22_12-32-16_v105A/Opensees Based damage Patterns Generation/exsjnoqq/checkpoints/last.ckpt"
+    },
+    {
+      "name": "v105B",
+      "result_dir": "results/DamagePatternGeneration/CFMADM/2026-10-22_12-32-16_v105B",
+      "checkpoint": "results/DamagePatternGeneration/CFMADM/2026-10-22_12-32-16_v105B/Opensees Based damage Patterns Generation/cst57wcz/checkpoints/last.ckpt"
+    }
+  ]
+}

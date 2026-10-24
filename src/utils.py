@@ -464,7 +464,13 @@ class MaskedDamageImageTransform:
         return self._prefix(image)
 
     def __call__(
-        self, image, object_mask=None, force_flip=None, apply_random_erasing=True, image_is_prefixed=False
+        self,
+        image,
+        object_mask=None,
+        force_flip=None,
+        apply_random_erasing=True,
+        image_is_prefixed=False,
+        rng_state=None,
     ):
         """Transform one image.
 
@@ -472,8 +478,17 @@ class MaskedDamageImageTransform:
             force_flip: If True/False, force (or skip) H-flip; if None, sample randomly.
                 Used for AR prev/target pairs so both frames share the same flip.
             apply_random_erasing: When False, skip random erasing (typical for prev frames).
+            rng_state: torch CPU RNG state to run the photometric pipeline from. Frames given the
+                same state get the same brightness / contrast / blur draw; the caller's RNG
+                stream is restored afterwards.
         """
+        saved = None
+        if rng_state is not None:
+            saved = torch.get_rng_state()
+            torch.set_rng_state(rng_state)
         target_image = self._tail(image) if image_is_prefixed else self.image_transform(image)
+        if saved is not None:
+            torch.set_rng_state(saved)
         if target_image.ndim != 3:
             raise ValueError(
                 "MaskedDamageImageTransform expects a CHW image tensor; "

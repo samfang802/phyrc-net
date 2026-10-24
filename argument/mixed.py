@@ -252,6 +252,21 @@ def add_architecture_arguments(parser):
     parser.add_argument('--cfm_physics_token_dim', type=int, default=128, help='Per-token dimension for GRU physics tokens (should match cfm_cond_dim)')
     parser.add_argument('--physics_dim', type=int, default=1024, help='GRU hidden-state dimension for split/adagn physics path')
     parser.add_argument(
+            '--damage_condition_encoder',
+            type=str,
+            default='',
+            help=(
+                'v11. Damage-state encoder run dir (docs/DAMAGE_STATE_ENCODER.md). Replaces the GRU hidden state '
+                'with [encoder z | damage scalars] per frame; set --physics_dim to z_dim + --damage_scalar_dim.'
+            ),
+        )
+    parser.add_argument('--damage_scalar_dim', type=int, default=0,
+                        help='v11. Trailing damage scalars of the physics vector, fused by their own gate alpha_d (4 with the encoder).')
+    parser.add_argument('--load_sign_condition', type=lambda x: bool(strtobool(x)), default=False,
+                        help='v11. Append the loading sign of the frame (+1/-1/0) to the face one-hot (scalar AdaGN path).')
+    parser.add_argument('--flip_keeps_direction', type=lambda x: bool(strtobool(x)), default=False,
+                        help='v11. Horizontal flip keeps the face label (the photographed faces are normal to the loading direction).')
+    parser.add_argument(
             '--physics_bottleneck_dim',
             type=int,
             default=0,
@@ -629,6 +644,118 @@ def add_experiments_arguments(parser):
             type=int,
             default=10,
             help='Network evaluations of the full rollout (Heun, so steps = nfe // 2).',
+        )
+    # --- v10.5: implicit residual through a ControlNet branch (docs/ARCHITECTURE_UPDATE_V10_5.md)
+    parser.add_argument(
+            '--refiner_implicit',
+            type=lambda x: bool(strtobool(x)),
+            default=False,
+            help=(
+                'v10.5. With --use_refiner_residual: S_{t-1} enters a ControlNet branch instead of '
+                'the input channels, and the network generates x_t itself (no S + residual).'
+            ),
+        )
+    parser.add_argument(
+            '--refiner_target_x1',
+            type=lambda x: bool(strtobool(x)),
+            default=False,
+            help=(
+                'v10.6. With --use_refiner_residual: the target is x_t itself (no S + residual) and '
+                'there is no single-frame task. S_{t-1} stays concatenated as in V10, or with '
+                '--refiner_implicit goes through the control branch (10.6-C).'
+            ),
+        )
+    parser.add_argument(
+            '--control_hint_only',
+            type=lambda x: bool(strtobool(x)),
+            default=False,
+            help='10.6-C, nycu-project layout. The control branch reads S_{t-1} alone through its own in_conv, has no mid, and is trained from scratch (not copied from the trunk).',
+        )
+    parser.add_argument(
+            '--control_inject_encoder',
+            type=lambda x: bool(strtobool(x)),
+            default=False,
+            help='False: control outputs are added to the decoder skips (10.5-A). True: added to the trunk encoder features before they are stored as skips (10.5-B).',
+        )
+    parser.add_argument(
+            '--freeze_trunk',
+            type=lambda x: bool(strtobool(x)),
+            default=False,
+            help='Freeze every velocity_net parameter outside the control branch (10.5-A).',
+        )
+    parser.add_argument(
+            '--trunk_lr_mult',
+            type=float,
+            default=0.2,
+            help='LR of an unfrozen trunk relative to --lr (control branch uses --lr).',
+        )
+    parser.add_argument(
+            '--refiner_control_drop_prob',
+            type=float,
+            default=0.15,
+            help='Training only. Per-sample probability of switching the control branch off (single-frame target).',
+        )
+    parser.add_argument(
+            '--control_guidance',
+            type=float,
+            default=1.0,
+            help='Sampling only. v = v_off + w (v_on - v_off); 1 = plain control.',
+        )
+    parser.add_argument(
+            '--refiner_state_cache',
+            type=lambda x: bool(strtobool(x)),
+            default=False,
+            help='Build (once) and use full-ODE samples of the frozen base for every train frame as the base hop of the state track.',
+        )
+    parser.add_argument(
+            '--refiner_state_cache_n',
+            type=int,
+            default=4,
+            help='Base samples stored per train frame.',
+        )
+    parser.add_argument(
+            '--refiner_state_perturb',
+            type=lambda x: bool(strtobool(x)),
+            default=False,
+            help='Training only. Exposure / low-frequency / damage-intensity / blur perturbation of S_{t-1} (the target is untouched).',
+        )
+    parser.add_argument('--refiner_state_bias_min', type=float, default=-0.2, help='Exposure offset range on S_{t-1}, model units ([-1, 1] image).')
+    parser.add_argument('--refiner_state_bias_max', type=float, default=0.4)
+    parser.add_argument('--refiner_state_gain_jitter', type=float, default=0.15, help='Contrast gain U(1-j, 1+j) about the image mean.')
+    parser.add_argument('--refiner_state_lowfreq_std', type=float, default=0.08, help='Std of a smooth brightness field (32 px cells, bicubic).')
+    parser.add_argument('--refiner_state_damage_shrink', type=float, default=0.7, help='Dark (damage) pixels pulled toward the image median by a factor U(this, 1).')
+    parser.add_argument('--refiner_state_blur_prob', type=float, default=0.3)
+    parser.add_argument(
+            '--refiner_tone_loss_weight',
+            type=float,
+            default=0.0,
+            help='Weight of the low-frequency tone loss |LP(x1_hat) - LP(x_t)|^2 (implicit refiner only).',
+        )
+    parser.add_argument(
+            '--refiner_shared_lowfreq_noise',
+            type=lambda x: bool(strtobool(x)),
+            default=False,
+            help='Sampling only. Every frame of a trajectory shares the block-mean band of its start noise.',
+        )
+    parser.add_argument('--refiner_lowfreq_block', type=int, default=16, help='Block size of the shared noise band (pixels).')
+    parser.add_argument(
+            '--share_photometric_aug',
+            type=lambda x: bool(strtobool(x)),
+            default=False,
+            help='Target, previous and second previous frame of one sample get the same brightness / contrast / blur draw.',
+        )
+    parser.add_argument(
+            '--kid_every_n_steps',
+            type=int,
+            default=0,
+            help='Every N steps generate the val split (sequence sampler for refiners) and log DINOv3 KID; 0 = off.',
+        )
+    parser.add_argument('--kid_k', type=int, default=8, help='Samples (trajectories) per val condition for the periodic KID.')
+    parser.add_argument(
+            '--kid_image_dir',
+            type=str,
+            default='Data/DamagePattern_inpaint_selfcondnoDI/images',
+            help='Reference images for the periodic KID (the inpainted set used by docs/eval/results.md).',
         )
     parser.add_argument(
             '--use_spall_growth_mask',
