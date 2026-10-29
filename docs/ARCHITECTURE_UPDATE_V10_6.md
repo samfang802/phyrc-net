@@ -30,13 +30,15 @@ Nothing in this file is a measured result unless it says so.
 
 ## 1. Why (from the v10.5 evaluation)
 
-Measured on test (`results/eval_suite/v105/test/summary.md`, `results/eval_suite/quick/test/summary.md`; comparisons with gn / V10 refiner use `docs/eval/results.md`, unpaired):
+> 2026-10-29: DINOv3 metrics in this section (KID, progression ratio, neighbour contrast, saturated frames) are JPEG-q75 aligned (`<suite>/<split>/kid_jpeg75/`, see `docs/eval/protocol.md`). Texture and temporal metrics are unaffected.
 
-- The v10.5 exposure package fixed the tone. `tone_jump` fell from 24.1 (V10 refiner) to 4.8-6.1 (GT 4.1), saturated frames from 8.1% to 1-2%, and frame-to-frame change came close to GT (0.89-1.07 x GT; gn_shared 0.41 x).
-- Realism and condition following fell back to gn's level. KID was 0.197 (A) and 0.206 (B), against gn 0.194 and the V10 refiner 0.156. The V10 refiner was also better on progression ratio (0.46 vs 0.40-0.42) and neighbour contrast (77% vs 61-64%).
+Measured on test (`results/eval_suite/v105/test/summary_jpeg75.md`, `results/eval_suite/quick/test/summary_jpeg75.md`; gn / V10 refiner from `results/eval_suite/jpeg75/test/summary.md`, unpaired):
+
+- The v10.5 exposure package fixed the tone. `tone_jump` fell from 24.1 (V10 refiner) to 4.8-6.1 (GT 4.1), saturated frames from 10% to 1-2%, and frame-to-frame change came close to GT (0.89-1.07 x GT; gn_shared 0.41 x).
+- Realism and condition following fell back to gn's level. KID was 0.136 (A) and 0.142 (B), against gn 0.138 and the V10 refiner 0.113. The V10 refiner was also better on progression ratio (0.43 vs 0.39-0.40), but its neighbour-contrast lead is small (87% vs 79-82%; paired z = +0.7 against A, not significant).
 - v10.5-A kept gn's whole single-frame model (frozen trunk, same target, same head) and its KID stayed at gn's level. The V10 refiner also loaded gn's weights, but it zeroed the output layer and learned a different target (the residual). The two differ in more than this, so this is not a controlled comparison. It does point the same way as the hypothesis that keeping gn's single-frame behaviour ties the refiner to gn.
 - 15% of v10.5 samples (control dropout), plus every first frame, trained the single-frame task, which is never used at inference: frame 0 comes from gn.
-- The step-3000 checkpoints of v10.5 scored as well as or better than step 15000 on test (KID 0.190 vs 0.203 for A, z = -3.4). Longer training roughly doubled `copy_excess` (A: 0.064 → 0.122), and B's grey fog (0.195 → 0.434) only appeared late. These checkpoints are from the 15000-step schedule, so they are not equivalent to a run that is only 3000 steps long.
+- The step-3000 checkpoints of v10.5 scored as well as or better than step 15000 on test (KID 0.131 vs 0.140 for A, z = -3.3). Longer training roughly doubled `copy_excess` (A: 0.064 → 0.122), and B's grey fog (0.195 → 0.434) only appeared late. These checkpoints are from the 15000-step schedule, so they are not equivalent to a run that is only 3000 steps long.
 
 **Why not ControlNet here.** ControlNet's main benefit is protecting a pretrained trunk with zero convs. Without a trunk worth protecting, it becomes a second encoder fused by addition at every scale (+2.2 M parameters, one more encoder pass per evaluation). Concatenation is the cascade (CDM / SR3) layout and the V10 layout, so v10.6 changes only the target and the training around it. A from-scratch ControlNet against a from-scratch concat net remains a possible follow-up; there is no evidence either way.
 
@@ -149,7 +151,7 @@ Peak GPU memory in the smoke runs, read from `nvidia-smi` (PyTorch allocator res
 
 ## 8. Evaluation plan
 
-Quick suite (`job/DamagePatternGeneration/eval_suite_quick.json`: test only, no second backbone, no interference removal or GT-mask placebo; about 4 minutes of generation per model). Models: 10.6-F, 10.6-S, each with and without shared low-frequency noise, plus the V10 refiner as a paired baseline. Its test samples already exist in `results/eval_suite/v105/test/samples/refiner.npz`; copy it into the quick output directory to skip regeneration.
+Quick suite (`job/evaluation/configs/eval_suite_quick.json`: test only, no second backbone, no interference removal or GT-mask placebo; about 4 minutes of generation per model). Models: 10.6-F, 10.6-S, each with and without shared low-frequency noise, plus the V10 refiner as a paired baseline. Its test samples already exist in `results/eval_suite/v105/test/samples/refiner.npz`; copy it into the quick output directory to skip regeneration.
 
 | Question | Read |
 |---|---|

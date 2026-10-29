@@ -384,6 +384,11 @@ class ADMUNetCFM(nn.Module):
         gated_fusion_alpha_dim="scalar",
         use_delta_g=False,
         damage_scalar_dim=0,
+        app_code_dim=0,
+        app_num_seq=8,
+        app_drop_prob=0.2,
+        app_noise_std=0.05,
+        app_mix_prob=0.0,
         image_channels=None,
         self_cond_channels=0,
         use_undamaged_ref=False,
@@ -502,7 +507,7 @@ class ADMUNetCFM(nn.Module):
             # v11: the last damage_scalar_dim entries of the physics vector are damage scalars with their
             # own branch, h += alpha_d * LN(MLP(d)); the rest (encoder z) goes through physics_linear.
             self.damage_scalar_dim = int(damage_scalar_dim)
-            g_dim = int(physics_dim) - self.damage_scalar_dim
+            g_dim = int(physics_dim) - self.damage_scalar_dim - (1 if int(app_code_dim) > 0 else 0)
             k = int(self.physics_bottleneck_dim)
             if 0 < k < g_dim:
                 # 1024 → k → cond_dim; no skip (the point is to drop fine g axes).
@@ -526,6 +531,21 @@ class ADMUNetCFM(nn.Module):
                 )
                 self.e_d_ln = nn.LayerNorm(cond_dim)
                 self.alpha_d = nn.Parameter(torch.zeros(cond_dim if self.gated_fusion_alpha_dim == "vector" else 1))
+            # Appearance code (docs/redesign/appearance_code.md): the physics vector ends with one column,
+            # the training-sequence index (-1 null, -2 mean code). Own zero-init gate, like e_d.
+            self.app_code_dim = int(app_code_dim)
+            self.app_num_seq = int(app_num_seq)
+            self.app_drop_prob = float(app_drop_prob)
+            self.app_noise_std = float(app_noise_std)
+            self.app_mix_prob = float(app_mix_prob)
+            if self.app_code_dim > 0:
+                self.app_embed = nn.Embedding(self.app_num_seq, self.app_code_dim)
+                self.app_null = nn.Parameter(torch.randn(self.app_code_dim))
+                self.app_mlp = nn.Sequential(
+                    nn.Linear(self.app_code_dim, 64), nn.SiLU(), nn.Linear(64, cond_dim)
+                )
+                self.e_a_ln = nn.LayerNorm(cond_dim)
+                self.alpha_a = nn.Parameter(torch.zeros(cond_dim if self.gated_fusion_alpha_dim == "vector" else 1))
             self.use_delta_g = bool(use_delta_g)
             if self.use_delta_g:
                 # h += alpha_dg * Linear(g_t - g_{t-1}). alpha_dg = 0 at init, no norm so the size of the change survives.
@@ -720,6 +740,12 @@ class ADMUNetCFM(nn.Module):
                 raise ValueError("gru_feat is required when use_split_conditioning=True")
             c_emb = self.scalar_mlp(c)
             e_c = self.e_c_ln(self.joint_mlp(t_emb + c_emb))
+            app_idx = None
+            if getattr(self, "app_code_dim", 0) > 0:
+                app_idx = torch.round(gru_feat[:, -1]).long()
+                gru_feat = gru_feat[:, :-1]
+                if gru_delta is not None:
+                    gru_delta = gru_delta[:, :-1]
             d = getattr(self, "damage_scalar_dim", 0)
             if d > 0:
                 damage_feat, gru_feat = gru_feat[:, -d:], gru_feat[:, :-d]
@@ -731,6 +757,8 @@ class ADMUNetCFM(nn.Module):
             h = e_c + self.alpha * e_g
             if d > 0:
                 h = h + self.alpha_d * self.e_d_ln(self.damage_mlp(damage_feat))
+            if app_idx is not None:
+                h = h + self.alpha_a * self.e_a_ln(self.app_mlp(self._app_code(app_idx)))
             if getattr(self, "use_delta_g", False) and gru_delta is not None:
                 h = h + self.alpha_dg * self.physics_linear_delta(gru_delta)
             if self.use_undamaged_ref:
@@ -751,6 +779,30 @@ class ADMUNetCFM(nn.Module):
             return self.joint_mlp(t_emb + c_emb)
         c_emb = self.cond_mlp(c)
         return self.joint_mlp(t_emb + c_emb)
+
+    def _app_code(self, idx):
+        """Per-sample appearance code [B, d] from sequence indices (-1 null, -2 mean of the table).
+
+        Training only: code dropout (-> null), Gaussian noise, optional mixup between two codes."""
+        emb = self.app_embed(idx.clamp(min=0))
+        null = self.app_null.to(emb.dtype).expand_as(emb)
+        mean = self.app_embed.weight.mean(0).expand_as(emb)
+        code = torch.where((idx == -1).unsqueeze(1), null, emb)
+        code = torch.where((idx == -2).unsqueeze(1), mean, code)
+        if self.training:
+            b = idx.shape[0]
+            if self.app_mix_prob > 0.0:
+                perm = torch.randperm(b, device=idx.device)
+                lam = torch.rand(b, 1, device=idx.device, dtype=code.dtype)
+                do = (torch.rand(b, 1, device=idx.device) < self.app_mix_prob).to(code.dtype)
+                lam = 1.0 - do * lam * 0.5  # keep >= 0.5 of the own code
+                code = lam * code + (1.0 - lam) * code[perm]
+            if self.app_noise_std > 0.0:
+                code = code + self.app_noise_std * torch.randn_like(code)
+            if self.app_drop_prob > 0.0:
+                drop = (torch.rand(b, 1, device=idx.device) < self.app_drop_prob)
+                code = torch.where(drop, null, code)
+        return code
 
     def _build_physics_tokens(self, gru_feat):
         """Map c_physics [B, 1024] → token sequence [B, L, D] for Cross-Attn."""
@@ -773,6 +825,11 @@ class ADMUNetCFM(nn.Module):
         if getattr(self, "damage_scalar_dim", 0) <= 0:
             return None
         return self.alpha_d.detach().float().mean()
+
+    def get_app_alpha(self):
+        if getattr(self, "app_code_dim", 0) <= 0:
+            return None
+        return self.alpha_a.detach().float().mean()
 
     def get_undamaged_ref_alpha(self):
         if not self.use_undamaged_ref or self.alpha_ref is None:
@@ -810,6 +867,8 @@ class ADMUNetCFM(nn.Module):
                         device=ckpt_weight.device,
                     )
                     spall_ch = int(getattr(self, "spall_cond_channels", 0))
+                    # Layout-oracle channel (layout_cond) also sits right before the mask; never with spall.
+                    spall_ch = spall_ch + int(getattr(self, "layout_cond_channels", 0))
                     # Spall channels sit immediately before the damage-mask channel.
                     if (
                         spall_ch > 0

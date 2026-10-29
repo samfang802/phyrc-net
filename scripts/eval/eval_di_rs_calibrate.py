@@ -36,6 +36,12 @@ def _parse():
     p.add_argument("--rs_result_dir", type=str, default="")
     p.add_argument("--out_dir", type=str, default="")
     p.add_argument("--batch_size", type=int, default=32)
+    p.add_argument(
+        "--r_spall_csv",
+        default="",
+        help="Override the Rs net's R_spall labels (default: its args.json r_spall_csv, else "
+        "<pattern_root>/r_spall.csv, as in training; Data/DamagePattern/anylabel_r_spall.csv = hand-drawn polygons)",
+    )
     return p.parse_args()
 
 
@@ -124,6 +130,8 @@ def main():
     out_dir = cli.out_dir or os.path.join(rs_dir, "di_rs_calibrate")
     os.makedirs(out_dir, exist_ok=True)
     args_rs = json.load(open(os.path.join(rs_dir, "args.json"), encoding="utf-8"))
+    if cli.r_spall_csv:
+        args_rs["r_spall_csv"] = cli.r_spall_csv
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     di_model = ResNet18SiameseLightning.load_from_checkpoint(

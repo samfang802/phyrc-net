@@ -13,7 +13,8 @@ For the six imaged specimens (train R315/R330/R615/R1015, val R307, test CTR1):
 Report: <out>/report.txt, per-frame table: <out>/frames.csv, figure: <out>/condition_g.png.
 Doc: docs/eval/condition_g.md.
 
-  python scripts/eval/analyze_condition_g.py results/condition_g
+  python scripts/eval/analyze_condition_g.py results/condition_g_anylabel   (old labels: results/condition_g --r_spall_csv old)
+R_spall labels: src/metrics/spall_labels.py (default anylabel_r_spall.csv; 'old' = r_spall.csv, before 2026-10-25).
 """
 import argparse, glob, importlib, json, os, sys
 import numpy as np, pandas as pd, torch
@@ -21,8 +22,13 @@ from sklearn.linear_model import RidgeCV, LogisticRegression
 
 sys.path.insert(0, os.getcwd())
 from src.data.hysteresis import HystereticDataset
+from src.metrics import spall_labels
 
-OUT = sys.argv[1]
+_ap = argparse.ArgumentParser()
+_ap.add_argument("out")
+spall_labels.add_arg(_ap)
+CLI = _ap.parse_args()
+OUT = CLI.out
 os.makedirs(OUT, exist_ok=True)
 torch.set_num_threads(2)
 dev = "cuda" if torch.cuda.is_available() else "cpu"
@@ -76,7 +82,7 @@ for _, r in lab.iterrows():
     d = sim["Drift(%)"].values; t = int(r.timestep)
     rows.append(dict(exp=r.exp, file=r.filename, dirn=r.direction, level=r.level, ts=t, drift_at=d[t], max_drift_so_far=np.abs(d[: t + 1]).max(), DI=r.DI))
 Fr = pd.DataFrame(rows)
-rs = pd.read_csv("Data/DamagePattern/r_spall.csv").set_index("filename")["R_spall"]
+rs = spall_labels.load(CLI.r_spall_csv)
 Fr["R_spall"] = Fr.file.map(rs)
 rep["frame_position_example"] = Fr[(Fr.exp == "CTR1") & (Fr.dirn == "Push")].sort_values("ts")[["file", "level", "ts", "drift_at", "max_drift_so_far"]].head(12).round(3)
 rep["frame_drift_vs_level"] = (Fr.assign(ratio=Fr.max_drift_so_far / (Fr.level / 1000).replace(0, np.nan))

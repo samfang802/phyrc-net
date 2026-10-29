@@ -36,8 +36,10 @@ def _frame_conditions(dataset, rows):
     size = int(dataset.image_size)
     for _, row in rows.iterrows():
         hs = dataset.hidden_state[row["exp"]][int(row["timestep"]), :]
-        hs = torch.as_tensor(hs, dtype=torch.float32)
-        hidden.append(dataset._apply_g_pca(hs))
+        hs = dataset._apply_g_pca(torch.as_tensor(hs, dtype=torch.float32))
+        if getattr(dataset, "app_code_dim", 0) > 0:  # trailing appearance-code column, as in __getitem__
+            hs = torch.cat([hs, hs.new_tensor([float(dataset.app_index(row["exp"], row["direction"]))])])
+        hidden.append(hs)
         info.append(dataset._info_for_exp(row["exp"]))
         direction.append(dataset._direction_to_tensor(row["direction"], flipped=False, exp=row["exp"], timestep=row["timestep"]))
         di.append(torch.FloatTensor([float(row["DI"])]))

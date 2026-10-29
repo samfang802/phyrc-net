@@ -61,6 +61,12 @@ def _parse_args():
     p.add_argument("--batch_size", type=int, default=4)
     p.add_argument("--num_workers", type=int, default=1)
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument(
+        "--image_ext",
+        type=str,
+        default="",
+        help="Output extension (e.g. png for a lossless set); default keeps the label filename (.jpg -> PIL q75)",
+    )
     p.add_argument("--device", type=str, default="")
     p.add_argument(
         "--skip_existing",
@@ -141,6 +147,12 @@ def _load_damage_pattern_mask(dataset, filename, image_size, device, dtype):
     return valid_mask.clamp_(0.0, 1.0).to(device=device, dtype=dtype).unsqueeze(0)
 
 
+def _out_name(filename, cli):
+    if not cli.image_ext:
+        return filename
+    return os.path.splitext(filename)[0] + "." + cli.image_ext.lstrip(".")
+
+
 def _tensor_to_uint8_rgb(x):
     """x: (C,H,W) in [-1,1] → uint8 HxWx3."""
     vis = torch.clamp(x.detach().float().cpu() * 0.5 + 0.5, 0.0, 1.0)
@@ -176,7 +188,7 @@ def _export_split(model, ds, split, args, cli, device, out_images, image_size):
         keep = []
         for i in idxs:
             fn = str(ds.label.iloc[i, 0])
-            if not os.path.isfile(os.path.join(out_images, fn)):
+            if not os.path.isfile(os.path.join(out_images, _out_name(fn, cli))):
                 keep.append(i)
         print(
             f"[export_inpaint] {split}: {len(keep)}/{n} remaining (skip_existing)",
@@ -242,7 +254,7 @@ def _export_split(model, ds, split, args, cli, device, out_images, image_size):
 
             for i, filename in enumerate(filenames):
                 arr = _tensor_to_uint8_rgb(decoded[i])
-                Image.fromarray(arr).save(os.path.join(out_images, filename))
+                Image.fromarray(arr).save(os.path.join(out_images, _out_name(filename, cli)))
                 written += 1
 
     return written
@@ -264,6 +276,8 @@ def _build_cfm_model(result_dir, checkpoint_path, device, ode_steps):
     args.use_wandb = False
     args.cascade_stage1_checkpoint = ""
     args.cascade_stage1_result_dir = ""
+    if int(getattr(args, "condition_dim", 0)) == 3 and bool(getattr(args, "zero_di_condition", False)):
+        args.keep_zero_di_slot = True  # V9 selfcondnoDI: trained with the zeroed DI slot kept (inpaint_generated_samples.py)
     model = getattr(importlib.import_module("src.model.ImageGeneration"), args.architecture)(
         regressor=None,
         **vars(args),
@@ -283,7 +297,7 @@ def _export_split_cascade(stage1, stage2, ds, split, cli, device, out_images):
         keep = []
         for i in idxs:
             fn = str(ds.label.iloc[i, 0])
-            if not os.path.isfile(os.path.join(out_images, fn)):
+            if not os.path.isfile(os.path.join(out_images, _out_name(fn, cli))):
                 keep.append(i)
         print(
             f"[export_inpaint] {split}: {len(keep)}/{n} remaining (skip_existing)",
@@ -368,7 +382,7 @@ def _export_split_cascade(stage1, stage2, ds, split, cli, device, out_images):
 
             for i, filename in enumerate(filenames):
                 arr = _tensor_to_uint8_rgb(decoded[i])
-                Image.fromarray(arr).save(os.path.join(out_images, filename))
+                Image.fromarray(arr).save(os.path.join(out_images, _out_name(filename, cli)))
                 written += 1
 
     return written

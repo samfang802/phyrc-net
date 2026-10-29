@@ -21,6 +21,38 @@
 - **為什麼**：CTR1 下緣有一根黑色立柱，生成器不會畫它。它又大又顯眼，DINOv3 一定會看。用原圖當參考集時，「換一根真實柱」的 KID 是 0.216；用補圖時只有 0.072。也就是說，柱與柱之間的差距大半是這根立柱造成的，而不是損傷內容。
 - 補圖已經是 128×128 並做過 CLAHE，所以評估時要加 `--no_clahe`，不能再套一次。
 
+## 參考集是 JPEG：生成圖也要過一次 JPEG
+
+補圖版參考集（train、val、test 都是）和 cGAN 的存檔圖都是 128×128 的 JPEG，量化表相同，約等於 PIL quality 75。`export_inpaint_dataset.py` 當時用 PIL 預設存 `.jpg`，所以參考集一直帶著壓縮痕跡。我們模型的生成圖則是直接以 uint8 存進 npz，沒有經過 JPEG。
+
+DINOv3 分得出這個差別（2026-10-28 發現）：
+
+- 特徵空間裡有一個「離開 CTR1」的方向，我們的模型都落在 −2.2 到 −2.5，cGAN 和真實圖接近 0。生成圖做一次 JPEG q75 之後，偏移縮到 −0.3 到 −0.6。
+- test KID 每個模型都降了 0.04–0.06（約三成），鄰居對比升了 12–15 個百分點。cGAN 本來就是 JPEG，不受影響。所以舊數字裡「cGAN 的 KID 比我們的模型好」主要是壓縮痕跡造成的。數字見 [results.md](results.md#對齊前後差多少)。
+- 我們模型彼此之間的排名沒有變（都沒壓縮，偏差方向相同），但絕對值和「對 cGAN、對參考集」的比較都要用對齊後的版本。
+
+**做法**：在 suite 設定檔裡，給每個**沒有經過 JPEG** 的模型加 `"jpeg_quality": 75`：
+
+```json
+{"name": "v11appr", "npz": {"test": "...", "val": "..."}, "jpeg_quality": 75}
+```
+
+- `run_eval_suite.py` 會把它轉成 `eval_dinov3_kid.py --jpeg v11appr=75`：抽 DINOv3 特徵之前，把該模型的生成圖用 PIL 存成 JPEG q75 再讀回來（`_jpeg_u8`）。真實圖不動。
+- 只影響 DINOv3 這一段（KID、probe、鄰居對比、演進）。損傷型態和時序指標讀原始 npz，不受影響。
+- 本來就是 JPEG 的外部模型（例如 cGAN 的存檔圖）**不要**再加，否則會壓兩次。外部模型如果存的是 PNG，就要加。
+- 同一個 npz 可以用兩個名稱各列一次（一個加 `jpeg_quality`、一個不加），直接看對齊前後的差，`eval_suite_jpeg75.json` 就是這樣做的。
+- `dinov3_kid.json` 每個模型會記下 `jpeg_quality`，事後可以查。
+
+**另一種做法（穩健性檢查）**：反過來把參考集重建成無損 PNG，生成圖不動。
+
+```bash
+qsub -v TASK=export_inpaint_png job/DamagePatternGeneration/misc_tasks.sh   # → Data/DamagePattern_inpaint_selfcondnoDI_png
+```
+
+設定檔加 `"image_dir": "Data/DamagePattern_inpaint_selfcondnoDI_png/images"`（範例 `eval_suite_pngref.json`）。這時換成 cGAN 吃虧。兩種做法的結論一致（[results.md](results.md#交叉檢查改用無損參考集)），但參考集不同，數字不能互比：「另一根真實柱」的 KID 在 JPEG 參考集是 0.072，PNG 參考集是 0.101。
+
+**主結果用 JPEG 對齊**（生成圖 q75、參考集不動），因為舊數字、cGAN 和打包給別人的 `eval_assets_v1` 都是 JPEG 參考集，改動最小。
+
 ## 生成圖也要處理干擾物
 
 如果參考集去掉了干擾物，生成圖也要去掉，兩邊才公平。步驟見 [interference.md](interference.md)。
@@ -32,8 +64,9 @@
 真實圖和生成圖走完全相同的一條路（Clean-FID 的原則，見 Parmar 2022）：
 
 1. 128 灰階 CLAHE，轉成 uint8。生成圖是 `x*0.5+0.5` 再四捨五入。
-2. 用 antialias bicubic 放大到 224。
-3. 複製成 3 通道，做 ImageNet 正規化。
+2. 生成圖沒有經過 JPEG 的話，做一次 JPEG q75 往返，和參考集對齊（[上一節](#參考集是-jpeg生成圖也要過一次-jpeg)）。
+3. 用 antialias bicubic 放大到 224。
+4. 複製成 3 通道，做 ImageNet 正規化。
 
 `eval_dinov3_kid.py` 會把 npz 裡的真實圖和「直接讀檔再做同樣前處理」的結果比對，印出 `npz-vs-file mean |Δ|`。這個值應該是 0。
 
@@ -104,7 +137,8 @@
 
 ## 可比性規則
 
-- 只有在**同一個參考集、同一個 backbone、同一套前處理**下的分數，才能互相比較。DINOv3 和 DINOv2 的 KID 尺度差約 500 倍，不能並列（[distribution.md](distribution.md#backbone-的選擇)）。
+- 只有在**同一個參考集、同一個 backbone、同一套前處理**下的分數，才能互相比較。前處理包含有沒有做 JPEG 對齊：2026-10-28 以前的 DINOv3 指標都沒有對齊，不能和之後的並列。
+- 和參考集、cGAN 比之前，先確認兩邊的壓縮狀態一樣（都是 JPEG q75，或都無損）。DINOv3 和 DINOv2 的 KID 尺度差約 500 倍，不能並列（[distribution.md](distribution.md#backbone-的選擇)）。
 - 不同 split 的 KID 不能直接比大小，因為參考柱本身離訓練集的遠近不同（CTR1 遠、R307 近）。
 - σ、patch 數、解析度、像素門檻在看到結果前就要固定，之後不能為了結果去改。
 - **循環偏差**：用 GT 幀 DINOv3 embedding 當條件的模型（`oracle_dino*`）不能用 DINOv3 的條件指標評，因為它把評分用的特徵空間當成輸入了（Woodland 2024）。改用 DINOv2 評可以降低偏差（[oracle.md](oracle.md#換-backbone-的檢查)）。

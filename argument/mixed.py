@@ -262,6 +262,16 @@ def add_architecture_arguments(parser):
         )
     parser.add_argument('--damage_scalar_dim', type=int, default=0,
                         help='v11. Trailing damage scalars of the physics vector, fused by their own gate alpha_d (4 with the encoder).')
+    parser.add_argument('--damage_condition_scalars', type=lambda x: bool(strtobool(x)), default=True,
+                        help='v11 ablation. False: the encoder condition is z only (no damage scalars); use with --damage_scalar_dim 0.')
+    parser.add_argument('--app_code_dim', type=int, default=0,
+                        help='Appearance code (docs/redesign/appearance_code.md): per-training-sequence learnable code of this size, own zero-init gate. 0 = off.')
+    parser.add_argument('--app_num_seq', type=int, default=8, help='Number of training sequences (column x face) for the appearance code table.')
+    parser.add_argument('--app_drop_prob', type=float, default=0.2, help='Appearance code: probability of replacing the code by the learned null code (train).')
+    parser.add_argument('--app_noise_std', type=float, default=0.05, help='Appearance code: Gaussian noise std on the code (train).')
+    parser.add_argument('--app_mix_prob', type=float, default=0.0, help='Appearance code: probability of mixing the code with another sample code (train).')
+    parser.add_argument('--app_unseen_code', type=int, default=-1, choices=(-1, -2),
+                        help='Appearance code of frames from columns outside the train list (val / test): -1 null, -2 mean of the training codes.')
     parser.add_argument('--load_sign_condition', type=lambda x: bool(strtobool(x)), default=False,
                         help='v11. Append the loading sign of the frame (+1/-1/0) to the face one-hot (scalar AdaGN path).')
     parser.add_argument('--flip_keeps_direction', type=lambda x: bool(strtobool(x)), default=False,
@@ -889,6 +899,130 @@ def add_experiments_arguments(parser):
             type=str,
             default='',
             help='Checkpoint whose velocity_net weights initialize G. Not a Lightning resume.',
+        )
+    parser.add_argument(
+            '--layout_cond',
+            type=lambda x: bool(strtobool(x)),
+            default=False,
+            help=(
+                'Phase-0 layout-oracle: add one zero-init U-Net input channel with the AnyLabel spall '
+                'layout (truncated SDF from --layout_cache). Needs use_damage_mask_condition. '
+                'Off by default; checkpoints without it are unchanged.'
+            ),
+        )
+    parser.add_argument(
+            '--layout_zero_init',
+            type=lambda x: bool(strtobool(x)),
+            default=True,
+            help='With --layout_cond: zero-init the layout input column (right for warm start). False = default init (from scratch).',
+        )
+    parser.add_argument(
+            '--layout_cache',
+            type=str,
+            default='Data/DamagePattern/anylabel_layout_sdf128.npz',
+            help='SDF cache from scripts/export/export_anylabel_layout_sdf.py (used with --layout_cond).',
+        )
+    parser.add_argument(
+            '--layout_drop_prob',
+            type=float,
+            default=0.2,
+            help='Train only, with --layout_cond: per-sample probability that the layout input is 0 (dropped).',
+        )
+    parser.add_argument(
+            '--opa_lambda_ord',
+            type=float,
+            default=0.0,
+            help='OPA-Flow: weight of L_ord = softplus(-logit) from the frozen pixel critic on one-step predictions (docs/redesign/phase1_opaflow.md). 0 with opa_lambda_mag 0 = off.',
+        )
+    parser.add_argument(
+            '--opa_lambda_mag',
+            type=float,
+            default=0.0,
+            help='OPA-Flow: weight of L_mag = Huber(m_hat - delta progress).',
+        )
+    parser.add_argument(
+            '--opa_n',
+            type=int,
+            default=16,
+            help='OPA-Flow: samples of the batch used for the critic loss (full-size extra forward).',
+        )
+    parser.add_argument(
+            '--opa_t_min',
+            type=float,
+            default=0.5,
+            help='OPA-Flow: one-step prediction uses t ~ U[opa_t_min, 1].',
+        )
+    parser.add_argument(
+            '--opa_aug',
+            type=lambda x: bool(strtobool(x)),
+            default=True,
+            help='OPA-Flow: tone/geometry augmentation on both critic inputs (as in critic training).',
+        )
+    parser.add_argument(
+            '--opa_critic_dir',
+            type=str,
+            default='results/phase0/critic/runs',
+            help='OPA-Flow: folder with <arch>_all4_s<seed>.pt critics.',
+        )
+    parser.add_argument(
+            '--opa_critic_archs',
+            type=str,
+            default='pair,siamese',
+            help='OPA-Flow: critic architectures (comma list), ensemble-averaged.',
+        )
+    parser.add_argument(
+            '--opa_critic_seeds',
+            type=str,
+            default='0,1,2',
+            help='OPA-Flow: critic seeds (comma list).',
+        )
+    parser.add_argument(
+            '--opa_encoder_run',
+            type=str,
+            default='results/DamageStateEncoder/A_info/2026-10-23_22-34-47',
+            help='OPA-Flow: damage-state encoder run that defines the progress P.',
+        )
+    parser.add_argument(
+            '--opa_free',
+            type=lambda x: bool(strtobool(x)),
+            default=False,
+            help='OPA-Flow group C: add image-free pair rollouts (needs --opa_free_cache).',
+        )
+    parser.add_argument(
+            '--opa_free_cache',
+            type=str,
+            default='Data/DamagePattern/opa_free_cache.npz',
+            help='OPA-Flow C: cache from scripts/export/export_opa_free_cache.py.',
+        )
+    parser.add_argument(
+            '--opa_free_n',
+            type=int,
+            default=8,
+            help='OPA-Flow C: image-free pairs per step.',
+        )
+    parser.add_argument(
+            '--opa_free_ratio',
+            type=float,
+            default=1.2,
+            help="OPA-Flow C: later state needs max drift >= ratio * earlier state's.",
+        )
+    parser.add_argument(
+            '--opa_free_roll_steps',
+            type=int,
+            default=8,
+            help='OPA-Flow C: stop-gradient Euler steps before the differentiable step.',
+        )
+    parser.add_argument(
+            '--opa_free_weight',
+            type=float,
+            default=1.0,
+            help='OPA-Flow C: weight of the image-free terms relative to the image-pair terms.',
+        )
+    parser.add_argument(
+            '--opa_diag_every',
+            type=int,
+            default=0,
+            help='OPA-Flow: print per-term gradient norms every N steps (0 = off), to choose the lambdas.',
         )
     parser.add_argument(
             '--ar_drop_prob_start',

@@ -1,0 +1,19 @@
+{
+  "out_dir": "results/phase0_layout_oracle/eval_suite_scratch",
+  "splits": ["test", "val"],
+  "k": 8,
+  "baseline": "gn",
+  "dino_model": "facebook/dinov3-vits16-pretrain-lvd1689m",
+  "extra_dino_models": ["facebook/dinov2-small"],
+  "models": [
+    {"name": "gn",
+     "npz": {"test": "results/eval_suite/v105/test/samples/gn.npz",
+             "val": "results/eval_suite/v106/val/samples/gn.npz"}},
+    {"name": "layout_oracle",
+     "npz": {"test": "results/phase0_layout_oracle/eval_suite/test/samples/layout_oracle.npz",
+             "val": "results/phase0_layout_oracle/eval_suite/val/samples/layout_oracle.npz"}},
+    {"name": "layout_scratch",
+     "result_dir": "results/DamagePatternGeneration/CFMADM/2026-10-25_14-20-09_layout_scratch",
+     "checkpoint": "results/DamagePatternGeneration/CFMADM/2026-10-25_14-20-09_layout_scratch/Opensees Based damage Patterns Generation/96lmhyv1/checkpoints/last.ckpt"}
+  ]
+}

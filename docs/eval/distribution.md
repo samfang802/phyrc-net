@@ -33,7 +33,7 @@ DINOv3 在 Hugging Face 需要申請權限。`eval_dinov3_kid.py --dino_model fa
 
 ※ 比較方向是 V9 − oracle（oracle 較好時為負）。
 
-- **結論不依賴 backbone**：兩個 split 的排名幾乎一樣，refiner、gn_shared 優於 gn、cGAN 的 KID 最低這幾點在兩種特徵下都顯著。
+- **結論不依賴 backbone**：兩個 split 的排名幾乎一樣，refiner、gn_shared 優於 gn、cGAN 的 KID 最低這幾點在兩種特徵下都顯著。（這張表是 JPEG 對齊前算的；「cGAN 的 KID 最低」在對齊後已經不成立，見 [results.md](results.md#對齊前後差多少)。DINOv2 下的對齊版本還沒有算。）
 - **變弱的一項**：test 上 V9 比 gn 好的鄰居對比，在 DINOv2 下不顯著（z = 1.2）；val 上兩種都顯著。
 - **KID 原始值不能跨 backbone 比**：DINOv2 的 KID 尺度大約是 DINOv3 的 500 倍。要並列時除以「另一根真實柱」的 KID（test：DINOv3 0.072，DINOv2 40.0）。
 - **oracle**：見 [oracle.md](oracle.md#換-backbone-的檢查)。
@@ -96,7 +96,8 @@ KID 用原始數值回報，沒有乘 1000。不偏估計可以是負數，代�
 
 1. **不看條件**：見上。
 2. **依樣本數加權**：test 有 86% 的幀幾乎沒有剝落。模型在這些幀上畫得乾淨，分數就好；剝落幀只占約 12%，畫不出來的代價被稀釋。
-3. **對「沒畫」和「畫壞」的懲罰不同**：「乾淨牆面加一點灰霧」在特徵空間裡仍落在真實分佈附近，只被罰「少了一個模式」；爆白爆黑的團塊離任何真實圖都遠，會被重罰。這是分佈指標對稀有模式（mode dropping）的盲點，也是 cGAN 的 KID 比較好、目視卻比較差的主要原因。
+3. **對「沒畫」和「畫壞」的懲罰不同**：「乾淨牆面加一點灰霧」在特徵空間裡仍落在真實分佈附近，只被罰「少了一個模式」；爆白爆黑的團塊離任何真實圖都遠，會被重罰。這是分佈指標對稀有模式（mode dropping）的盲點。以前我們用它來解釋「cGAN 的 KID 比較好、目視卻比較差」，但 2026-10-28 發現那個差距主要來自 JPEG：參考集和 cGAN 是 JPEG，我們的生成圖不是。對齊後 v11appr、V106C 的 KID 都贏 cGAN（[results.md](results.md#真實感與條件一致性)）。這個盲點仍然存在，只是不再是主因。
+4. **對壓縮痕跡敏感**：DINOv3 分得出 JPEG q75 的痕跡，而且影響大到能翻轉模型排名（test KID 差 0.04–0.06）。和參考集比之前，兩邊的壓縮狀態要一致，做法見 [protocol.md](protocol.md#參考集是-jpeg生成圖也要過一次-jpeg)。
 
 所以 KID 一定要和條件指標、損傷型態指標一起報告。
 

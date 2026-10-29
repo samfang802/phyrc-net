@@ -8,7 +8,9 @@ raw representations (z-scored per dimension): GRU g, encoder z, encoder [z, s].
   3. change between consecutive labelled frames of one face (opposite loading direction)
   4. peak-force error on the encoder's val specimens, encoder head vs GRU
 
-  python scripts/eval/screen_condition_encoder.py results/DamageStateEncoder/<run> [--out <dir>]
+  python scripts/eval/screen_condition_encoder.py results/DamageStateEncoder/<run> [--out <dir>] [--r_spall_csv old]
+R_spall labels: src/metrics/spall_labels.py (default anylabel_r_spall.csv; 'old' = r_spall.csv, the screens
+before 2026-10-25, written to <run>/screen). The default output dir is <run>/screen_anylabel.
 """
 
 import argparse, glob, importlib, json, os, sys
@@ -22,6 +24,7 @@ sys.path.insert(0, os.getcwd())
 from src.data.damage_state import SEG, TARGETS, DamageStateDataset, IMAGE_SPECIMENS
 from src.data.hysteresis import HystereticDataset
 from src.model.damage_state_encoder import DamageStateEncoder
+from src.metrics import spall_labels
 
 TR = ["R315", "R330", "R615", "R1015"]
 
@@ -84,8 +87,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("run")
     ap.add_argument("--out", default=None)
+    spall_labels.add_arg(ap)
     cli = ap.parse_args()
-    out = cli.out or os.path.join(cli.run, "screen")
+    old = spall_labels.resolve(cli.r_spall_csv) == spall_labels.R_SPALL_CSV_OLD
+    out = cli.out or os.path.join(cli.run, "screen" if old else "screen_anylabel")
     os.makedirs(out, exist_ok=True)
     torch.set_num_threads(2)
     val_ids = json.load(open(os.path.join(cli.run, "args.json")))["val_ids"]
@@ -97,7 +102,7 @@ def main():
     lab = pd.read_csv("Data/DamagePattern/label.csv")
     F = lab[lab.exp.isin(IMAGE_SPECIMENS)].reset_index(drop=True)
     F["level"] = F.filename.str.split("_").str[2].astype(int)
-    rs = pd.read_csv("Data/DamagePattern/r_spall.csv").set_index("filename")["R_spall"]
+    rs = spall_labels.load(cli.r_spall_csv)
     F["R_spall"] = F.filename.map(rs)
     drift = {e: pd.read_csv(f"Data/Hysteresis/Simulate/{e}.csv")["Drift(%)"].values for e in IMAGE_SPECIMENS}
     F["sign"] = [int(np.sign(drift[r.exp][int(r.timestep)])) for _, r in F.iterrows()]
@@ -166,6 +171,7 @@ def main():
     # one row per representation for sweeps (scripts/eval/collect_encoder_screens.py)
     var = {n: decompose(X, F, np.ones(len(F), bool)) for n, X in reps.items()}
     summary = {n: {**{k: float(v) for k, v in probe_tab.loc[n].items()}, "sign_var": var[n]["sign"]} for n in reps}
+    summary["_r_spall_csv"] = spall_labels.resolve(cli.r_spall_csv)
     summary["_force_rmse_median"] = {"GRU": float(np.median(err_g)), "encoder": float(np.median(err_e))}
     with open(os.path.join(out, "metrics.json"), "w") as f:
         json.dump(summary, f, indent=1)

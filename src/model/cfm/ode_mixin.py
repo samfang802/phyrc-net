@@ -840,12 +840,30 @@ class CFMODEMixin:
                 return z_state
             return repaint_known(z_state, z0, spall_prev, t_scalar, spall_lock)
 
+        churn_s = float(getattr(self, "churn_s", 0.0) or 0.0)
+        churn_lo = float(getattr(self, "churn_t_lo", 0.0))
+        churn_hi = float(getattr(self, "churn_t_hi", 1.0))
+        churn_noise = float(getattr(self, "churn_s_noise", 1.0))
+
         for i in range(n_steps):
             t_scalar = float(times[i])
             t_next_scalar = float(times[i + 1])
             dt = t_next_scalar - t_scalar
             t = torch.full((c.shape[0],), t_scalar, device=c.device)
             z = _project_spall(z, t_scalar)
+
+            # --- optional EDM-style churn (default off): inside t in [t_lo, t_hi) step back to
+            # t_hat = t(1-gamma) by re-noising (variance-preserving for z_t=(1-t)z0+t z1), then
+            # integrate from t_hat. Low-noise steps (t >= t_hi) stay deterministic.
+            if churn_s > 0.0 and churn_lo <= t_scalar < churn_hi and t_scalar > 0.0:
+                gamma = min(churn_s / float(n_steps), 2.0 ** 0.5 - 1.0)
+                t_hat = t_scalar * (1.0 - gamma)
+                ratio = t_hat / t_scalar
+                std = max((1.0 - t_hat) ** 2 - (ratio * (1.0 - t_scalar)) ** 2, 0.0) ** 0.5
+                z = ratio * z + churn_noise * std * torch.randn_like(z)
+                t_scalar = t_hat
+                dt = t_next_scalar - t_scalar
+                t = torch.full((c.shape[0],), t_scalar, device=c.device)
 
             # --- Heun stage 1 ---
             v_t, z_for_clean = _guided_velocity(z, t, t_scalar)

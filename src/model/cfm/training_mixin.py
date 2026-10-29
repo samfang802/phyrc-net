@@ -31,6 +31,11 @@ class CFMTrainingMixin:
         loss_fm = self._flow_matching_loss_for_batch(
             target_space_data, c, gru_feat, valid_mask, condition_mask, ar_pack, info=info
         )
+        loss_total = loss_fm
+        if getattr(self, "opa_enabled", False):
+            loss_opa = self._opa_extra_loss(target_space_data, c, gru_feat, condition_mask, loss_fm)
+            if loss_opa is not None:
+                loss_total = loss_fm + loss_opa
         if self.add_DI_loss:
             lr_cond = (
                 self._cascade_lr_spatial(target_space_data) if self.use_cascade_sr else None
@@ -41,11 +46,13 @@ class CFMTrainingMixin:
             sampled_trans = self.custom_transform(sampled_vis)
             pred_di = self.regressor(sampled_trans, info)
             loss_di = nn.MSELoss()(pred_di, DI)
-            return loss_fm + loss_di, loss_fm, loss_di
-        return loss_fm, loss_fm, None
+            return loss_total + loss_di, loss_fm, loss_di
+        return loss_total, loss_fm, None
 
 
     def training_step(self, batch, batch_idx):
+        if getattr(self, "opa_enabled", False):
+            self._opa_meta = (batch["filename"], batch["flipped"]) if isinstance(batch, dict) and "filename" in batch else None
         (
             real_data,
             hidden_state,
@@ -108,6 +115,9 @@ class CFMTrainingMixin:
         alpha_d_val = self.velocity_net.get_damage_alpha() if hasattr(self.velocity_net, "get_damage_alpha") else None
         if alpha_d_val is not None:
             self.log("train/damage_alpha", alpha_d_val, prog_bar=False, on_step=True, on_epoch=False)
+        alpha_a_val = self.velocity_net.get_app_alpha() if hasattr(self.velocity_net, "get_app_alpha") else None
+        if alpha_a_val is not None:
+            self.log("train/app_alpha", alpha_a_val, prog_bar=False, on_step=True, on_epoch=False)
         alpha_ref_val = self.velocity_net.get_undamaged_ref_alpha()
         if alpha_ref_val is not None:
             self.log(

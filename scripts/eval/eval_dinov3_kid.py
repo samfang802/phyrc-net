@@ -64,6 +64,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from src.metrics import dino_mmd as dm
+from src.metrics import spall_labels
 
 
 def _parse_args():
@@ -91,7 +92,10 @@ def _parse_args():
     p.add_argument("--nbr_k", type=int, default=4, help="GT neighbours: same specimen and face, closest DI")
     p.add_argument("--nbr_shuffle", type=int, default=20)
     p.add_argument("--prog_shuffle", type=int, default=20)
+    p.add_argument("--jpeg", nargs="*", default=[], metavar="NAME=QUALITY",
+                   help="JPEG round-trip (PIL quality) of these models' samples before features, to match a JPEG reference")
     p.add_argument("--seed", type=int, default=0)
+    spall_labels.add_arg(p)
     p.add_argument("--device", default="cuda")
     return p.parse_args()
 
@@ -105,6 +109,19 @@ def _load_npz(path):
         if k in z:
             out[k] = z[k]
     return out
+
+
+def _jpeg_u8(u8, quality):
+    """PIL JPEG round trip of (..., H, W) uint8 grayscale images (saved as RGB, read back as L)."""
+    import io
+    from PIL import Image
+
+    flat, out = u8.reshape(-1, *u8.shape[-2:]), np.empty_like(u8.reshape(-1, *u8.shape[-2:]))
+    for i, a in enumerate(flat):
+        buf = io.BytesIO()
+        Image.fromarray(a).convert("RGB").save(buf, format="JPEG", quality=quality)
+        out[i] = np.asarray(Image.open(buf).convert("L"))
+    return out.reshape(u8.shape)
 
 
 def _model_slug(model_id):
@@ -138,11 +155,11 @@ def _r(d):
     return {k: (round(v, 8) if isinstance(v, float) else v) for k, v in d.items()}
 
 
-def _labels(filenames):
+def _labels(filenames, r_spall_csv=None):
     import pandas as pd
 
     di = pd.read_csv("Data/DamagePattern/label.csv").set_index("filename")["DI"]
-    rs = pd.read_csv("Data/DamagePattern/r_spall.csv").set_index("filename")["R_spall"]
+    rs = spall_labels.load(r_spall_csv)
     names = list(filenames)
     return {"DI": di.loc[names].to_numpy(np.float64), "R_spall": rs.loc[names].to_numpy(np.float64)}
 
@@ -213,6 +230,9 @@ def main():
         name, path = item.split("=", 1)
         runs[name] = _load_npz(path)
         runs[name]["path"] = os.path.abspath(path)
+    jpeg_q = {n: int(q) for n, q in (j.split("=", 1) for j in cli.jpeg)}
+    for name, q in jpeg_q.items():
+        runs[name]["fake"] = _jpeg_u8(runs[name]["fake"], q)
     ref = next(iter(runs.values()))
     for name, r in runs.items():
         if not np.array_equal(r["filename"], ref["filename"]):
@@ -238,7 +258,7 @@ def main():
     sigma = dm.median_distance(real_g)
     tert = np.quantile(DI, [1 / 3, 2 / 3])
     di_bins = {"low": DI <= tert[0], "mid": (DI > tert[0]) & (DI <= tert[1]), "high": DI > tert[1]}
-    ref_labels = _labels(ref["filename"])
+    ref_labels = _labels(ref["filename"], cli.r_spall_csv)
     R_sp = ref_labels["R_spall"]
     # Jackknife unit: one face at one drift level (~6 near-duplicate frames), not one frame.
     blocks = np.array([dm.frame_block(n) for n in ref["filename"]])
@@ -255,6 +275,7 @@ def main():
         ),
         "circular_eval_warning": False,
         "normalize": cli.normalize,
+        "r_spall_csv": spall_labels.resolve(cli.r_spall_csv),
         "image_dir": cli.image_dir,
         "n_reference": G,
         "reference_files_check_mean_abs_uint8": pipeline_mad,
@@ -321,7 +342,7 @@ def main():
 
     probes = None
     if cli.probe_split:
-        probes = _fit_probes(_split_g(cli.probe_split), _labels(split_ids[cli.probe_split]))
+        probes = _fit_probes(_split_g(cli.probe_split), _labels(split_ids[cli.probe_split], cli.r_spall_csv))
         report["reference_rows"]["probe_on_heldout_reals"] = _score_probes(probes, real_g, ref_labels, DI)
 
     # ---- GT-neighbourhood contrast: neighbours and the cross-specimen ceiling
@@ -342,7 +363,7 @@ def main():
             pool_p.append(p_s[keep])
     nbr_ceiling = {}
     if pool_names:
-        pool_DI = _labels(pool_names)["DI"]
+        pool_DI = _labels(pool_names, cli.r_spall_csv)["DI"]
         pool_spec = np.array([dm.frame_key(n)[0] for n in pool_names])
         pool_feat = {"global": np.concatenate(pool_g)}
         if pool_p:
@@ -392,7 +413,7 @@ def main():
         fake_g, fake_p = feats(fake.reshape(-1, *fake.shape[2:]))
         gf = np.repeat(gr, K)
         mm = dm.global_mmds(fake_g, gf, real_g, gr, G, sigma, cli.device)
-        out = {"npz": r["path"], "k": int(K), "meta": r["meta"]}
+        out = {"npz": r["path"], "k": int(K), "meta": r["meta"], "jpeg_quality": jpeg_q.get(name)}
         if "interference_flag" in r:
             flag, mask = r["interference_flag"], r["interference_mask"]
             out["interference"] = {

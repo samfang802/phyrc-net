@@ -50,7 +50,7 @@ cGANckpt/
 Sample/
 temp/
 temp_all/
-evaluation/
+/evaluation/
 notebook/
 generation/
 phase1_extractor/
@@ -60,3 +60,6 @@ draw.ipynb
 best.ckpt
 # Packed evaluation assets (scripts/eval/pack_eval_assets.sh)
 dist/
+
+# Working notes kept local
+/docs/redesign/

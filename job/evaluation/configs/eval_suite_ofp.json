@@ -1,0 +1,30 @@
+{
+  "out_dir": "results/phase1_ofp/eval_suite",
+  "splits": ["test", "val"],
+  "k": 8,
+  "baseline": "gn",
+  "dino_model": "facebook/dinov3-vits16-pretrain-lvd1689m",
+  "extra_dino_models": ["facebook/dinov2-small"],
+  "models": [
+    {"name": "gn",
+     "npz": {"test": "results/eval_suite/v105/test/samples/gn.npz",
+             "val": "results/eval_suite/v106/val/samples/gn.npz"}},
+    {"name": "gn_facfg",
+     "npz": {"test": "results/eval_suite/phase0_guidance/test/samples/gn_facfg.npz",
+             "val": "results/eval_suite/phase0_guidance/val/samples/gn_facfg.npz"}},
+    {"name": "refiner",
+     "npz": {"test": "results/eval_suite/v105/test/samples/refiner.npz",
+             "val": "results/eval_suite/v106/val/samples/refiner.npz"}},
+    {"name": "v106F",
+     "npz": {"test": "results/eval_suite/v106/test/samples/v106F.npz",
+             "val": "results/eval_suite/v106/val/samples/v106F.npz"}},
+    {"name": "ofp_c",
+     "npz": {"test": "results/phase1_ofp/samples/ofp_c_test.npz", "val": "results/phase1_ofp/samples/ofp_c_val.npz"}},
+    {"name": "ofp_b",
+     "npz": {"test": "results/phase1_ofp/samples/ofp_b_test.npz", "val": "results/phase1_ofp/samples/ofp_b_val.npz"}},
+    {"name": "iso32_gt",
+     "npz": {"test": "results/phase1_layout_harness/samples/iso32_test.npz", "val": "results/phase1_layout_harness/samples/iso32_val.npz"}},
+    {"name": "ofp_c_tmp",
+     "npz": {"test": "results/phase1_ofp/samples/ofp_c_tmp_test.npz", "val": "results/phase1_ofp/samples/ofp_c_tmp_val.npz"}}
+  ]
+}

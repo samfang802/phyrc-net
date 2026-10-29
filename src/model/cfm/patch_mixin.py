@@ -342,10 +342,23 @@ class CFMPatchMixin:
         return (sampled + lr_cond).clamp(-1.0, 1.0)
 
 
-    def _build_velocity_net_input(self, z_image, coords=None, self_cond=None, lr_cond=None, spall_cond=None):
+    def _split_layout_channel(self, damage_mask, z_image):
+        """layout_cond: the condition mask carries [object mask | layout SDF]. Returns (mask, layout).
+        A 1-channel (or missing) mask means no layout: the layout input is 0, the dropped value."""
+        b, h, w = z_image.shape[0], z_image.shape[-2], z_image.shape[-1]
+        if damage_mask is None or damage_mask.shape[1] < 2:
+            return damage_mask, z_image.new_zeros(b, 1, h, w)
+        layout = damage_mask[:, 1:2]
+        if layout.shape[-2:] != (h, w):
+            layout = F.interpolate(layout, size=(h, w), mode="bilinear", align_corners=False)
+        return damage_mask[:, :1], layout.to(dtype=z_image.dtype)
+
+    def _build_velocity_net_input(
+        self, z_image, coords=None, self_cond=None, lr_cond=None, spall_cond=None, layout=None
+    ):
         """
         Assemble U-Net spatial input (mask is concatenated inside ADMUNetCFM.forward):
-          [ z_image (C) | self_cond (C) | lr_cond (C) | coords_x | coords_y | pool(x_prev) | m ]
+          [ z_image (C) | self_cond (C) | lr_cond (C) | coords_x | coords_y | pool(x_prev) | m | layout ]
         """
         if self.use_self_conditioning:
             if self_cond is None:
@@ -394,6 +407,12 @@ class CFMPatchMixin:
             z_in = torch.cat([z_in, spall_cond.to(dtype=z_in.dtype)], dim=1)
         elif spall_cond is not None:
             raise ValueError("spall_cond provided but use_spall_growth_mask=False")
+        if getattr(self, "layout_cond", False):
+            if layout is None:
+                layout = z_image.new_zeros(z_image.shape[0], 1, z_image.shape[-2], z_image.shape[-1])
+            z_in = torch.cat([z_in, layout.to(dtype=z_in.dtype)], dim=1)
+        elif layout is not None:
+            raise ValueError("layout provided but layout_cond=False")
         return z_in
 
 
@@ -415,12 +434,16 @@ class CFMPatchMixin:
     ):
         # v10.5: S_{t-1} (passed as lr_cond) is the ControlNet hint, not an input channel.
         control_hint = lr_cond if getattr(self, "refiner_implicit", False) else None
+        layout = None
+        if getattr(self, "layout_cond", False):
+            damage_mask, layout = self._split_layout_channel(damage_mask, z_image)
         model_in = self._build_velocity_net_input(
             z_image,
             coords=coords,
             self_cond=self_cond,
             lr_cond=None if control_hint is not None else lr_cond,
             spall_cond=spall_cond,
+            **({"layout": layout} if layout is not None else {}),
         )
         if ref_feat is None:
             ref_feat = getattr(self, "_undamaged_ref_embed", None)

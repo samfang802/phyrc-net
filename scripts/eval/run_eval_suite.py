@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The whole evaluation in one command: samples → interference removal → three evaluations → summary.
 
-Driven by a JSON config (example: job/DamagePatternGeneration/eval_suite_models.json):
+Driven by a JSON config (example: job/evaluation/configs/eval_suite_models.json):
 
   {
     "out_dir": "results/eval_suite/my_run",
@@ -11,7 +11,8 @@ Driven by a JSON config (example: job/DamagePatternGeneration/eval_suite_models.
     "dino_model": "facebook/dinov3-vits16-pretrain-lvd1689m",
     "extra_dino_models": ["facebook/dinov2-small"],
     "models": [
-      {"name": "gn", "result_dir": "results/.../1024-dadaGNsplit", "checkpoint": "results/.../last.ckpt"},
+      {"name": "gn", "result_dir": "results/.../1024-dadaGNsplit", "checkpoint": "results/.../last.ckpt",
+       "jpeg_quality": 75},
       {"name": "gn_shared", "result_dir": "...", "checkpoint": "...", "shared_noise": true},
       {"name": "gn_apg2", "result_dir": "...", "checkpoint": "...", "set": ["apg_guidance_scale=2.0"]},
       {"name": "cgan", "images": {"test": {"dir": "cGANckpt/CTR1", "suffix": "_test.jpg"}}},
@@ -25,6 +26,9 @@ A model is one of
   - a folder of saved images per split ("images"): images_to_npz.py;
   - a ready npz per split ("npz"), in the src/metrics/samples_io.py layout.
 A model with no source for a split (e.g. no val images) is left out of that split.
+"jpeg_quality": Q round-trips that model's samples through PIL JPEG quality Q before the DINO features.
+The reference set (and the archived cGAN images) are JPEG q75, so set 75 on every model whose images
+were never JPEG'd, i.e. all models of this repo; never on JPEG inputs. Texture / temporal are unaffected.
 
 Backbone: "dino_model" (default DINOv3 ViT-S/16, gated on Hugging Face: accept its licence and
 `huggingface-cli login`) feeds the realism / condition metrics and the white-vs-DINO test. Set it to
@@ -43,7 +47,7 @@ interrupted run continues where it stopped; --force redoes everything. Logs: <ou
 GPU: whatever CUDA_VISIBLE_DEVICES is set to. Protocol and the meaning of each number: docs/eval/.
 
 Examples:
-  python scripts/eval/run_eval_suite.py --config job/DamagePatternGeneration/eval_suite_models.json
+  python scripts/eval/run_eval_suite.py --config job/evaluation/configs/eval_suite_models.json
   python scripts/eval/run_eval_suite.py --config cfg.json --splits test --only summary
   python scripts/eval/run_eval_suite.py --config cfg.json --dry_run
 """
@@ -174,6 +178,8 @@ def _sample_step(r, cfg, m, split, raw):
                 "--seed", cfg["seed"], "--out", raw]
         if m.get("shared_noise"):
             args.append("--shared_noise")
+        if m.get("app_code"):
+            args += ["--app_code", m["app_code"]]
         if m.get("set"):
             args += ["--set", *m["set"]]
         r.run(f"{split}_samples_{m['name']}", args, [raw])
@@ -236,10 +242,13 @@ def main():
         kid_dirs = {b: _kid_dir(sd, b) for b in dict.fromkeys([cfg["dino_model"], *cfg["extra_dino_models"]])}
         kid_dir = kid_dirs[cfg["dino_model"]]
         other = OTHER_SPLIT.get(split, "")
+        # Per-model "jpeg_quality": JPEG round trip before DINO features (reference set is JPEG); KID path only.
+        jq = [f"{m['name']}={m['jpeg_quality']}" for m in cfg["models"] if m.get("jpeg_quality") and m["name"] in samples]
+        jpeg = ["--jpeg", *jq] if jq else []
         if r.want("kid"):
             for b, d in kid_dirs.items():
                 r.run(f"{split}_{os.path.basename(d)}", ["scripts/eval/eval_dinov3_kid.py", "--samples", *eq_list, *common,
-                                                        "--dino_model", b, "--other_split", other if split == "test" else "",
+                                                        "--dino_model", b, *jpeg, "--other_split", other if split == "test" else "",
                                                         "--out_dir", d], [os.path.join(d, "dinov3_kid.json")])
         if r.want("texture"):
             dino = ["--dino", "--dino_model_id", cfg["dino_model"]] if max(int(m.get("k", cfg["k"])) for m in cfg["models"]) > 1 else []

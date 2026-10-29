@@ -501,9 +501,44 @@ def bind_cfm_options(
         )
     self.use_damage_mask_condition = bool(kwargs.get("use_damage_mask_condition", False))
     self.use_object_loss_mask = bool(kwargs.get("use_object_loss_mask", True))
+    # Phase-0 layout-oracle (docs/redesign/phase0_layout_oracle.md): one zero-init input channel with
+    # the spall layout SDF. It rides as channel 1 of the condition mask (so patch crops cut it too)
+    # and is split off in _predict_velocity. Off by default.
+    self.layout_cond = bool(kwargs.get("layout_cond", False))
+    if self.layout_cond and not self.use_damage_mask_condition:
+        raise ValueError("layout_cond rides on the condition mask; it needs use_damage_mask_condition=True")
+    if self.layout_cond and bool(kwargs.get("use_spall_growth_mask", False)):
+        raise ValueError("layout_cond cannot be combined with use_spall_growth_mask (both claim the column before the mask)")
+    # OPA-Flow (docs/redesign/phase1_opaflow.md): frozen pixel-critic ordinal / magnitude losses on one-step
+    # predictions. All off unless a lambda > 0 (src/model/cfm/opa_mixin.py).
+    self.opa_lambda_ord = float(kwargs.get("opa_lambda_ord", 0.0))
+    self.opa_lambda_mag = float(kwargs.get("opa_lambda_mag", 0.0))
+    self.opa_enabled = self.opa_lambda_ord > 0.0 or self.opa_lambda_mag > 0.0
+    self.opa_n = int(kwargs.get("opa_n", 16))
+    self.opa_t_min = float(kwargs.get("opa_t_min", 0.5))
+    self.opa_aug = bool(kwargs.get("opa_aug", True))
+    self.opa_critic_dir = str(kwargs.get("opa_critic_dir", "results/phase0/critic/runs"))
+    self.opa_critic_archs = [a for a in str(kwargs.get("opa_critic_archs", "pair,siamese")).split(",") if a]
+    self.opa_critic_seeds = [int(s) for s in str(kwargs.get("opa_critic_seeds", "0,1,2")).split(",") if s != ""]
+    self.opa_encoder_run = str(kwargs.get("opa_encoder_run", "results/DamageStateEncoder/A_info/2026-10-23_22-34-47"))
+    self.opa_data_path = str(kwargs.get("data_path", "id_list_val_R307.json"))
+    self.opa_free = bool(kwargs.get("opa_free", False)) and self.opa_enabled
+    self.opa_free_cache = str(kwargs.get("opa_free_cache", "Data/DamagePattern/opa_free_cache.npz"))
+    self.opa_free_n = int(kwargs.get("opa_free_n", 8))
+    self.opa_free_ratio = float(kwargs.get("opa_free_ratio", 1.2))
+    self.opa_free_roll_steps = int(kwargs.get("opa_free_roll_steps", 8))
+    self.opa_free_weight = float(kwargs.get("opa_free_weight", 1.0))
+    self.opa_diag_every = int(kwargs.get("opa_diag_every", 0))
+    self._opa_meta = None
     self.physics_dim = int(kwargs.get("physics_dim", 1024))
     # v11: the physics vector ends with this many damage scalars (own gated branch in the velocity net).
     self.damage_scalar_dim = int(kwargs.get("damage_scalar_dim", 0))
+    # Appearance code (docs/redesign/appearance_code.md): 0 = off, bit-identical to v11.
+    self.app_code_dim = int(kwargs.get("app_code_dim", 0))
+    self.app_num_seq = int(kwargs.get("app_num_seq", 8))
+    self.app_drop_prob = float(kwargs.get("app_drop_prob", 0.2))
+    self.app_noise_std = float(kwargs.get("app_noise_std", 0.05))
+    self.app_mix_prob = float(kwargs.get("app_mix_prob", 0.0))
     self.g_pca_dim = int(kwargs.get("g_pca_dim", 0))
     if self.g_pca_dim < 0:
         raise ValueError(f"g_pca_dim must be >= 0, got {self.g_pca_dim}")
@@ -632,6 +667,7 @@ def bind_cfm_options(
         )
         + self.coord_channels
         + (2 if self.use_spall_growth_mask else 0)
+        + (1 if self.layout_cond else 0)
     )
     net_out_channels = self.model_in_channels + self.coord_channels
     cfm_mid_attn_heads = max(1, int(kwargs.get("cfm_mid_attn_heads", 4)))
@@ -673,6 +709,17 @@ def bind_cfm_options(
         damage_scalar_dim=self.damage_scalar_dim,
         **(
             {
+                "app_code_dim": self.app_code_dim,
+                "app_num_seq": self.app_num_seq,
+                "app_drop_prob": self.app_drop_prob,
+                "app_noise_std": self.app_noise_std,
+                "app_mix_prob": self.app_mix_prob,
+            }
+            if self.app_code_dim > 0
+            else {}
+        ),
+        **(
+            {
                 "use_control_branch": True,
                 "control_hint_channels": self.model_in_channels,
                 "control_delta_g": self.use_delta_g,
@@ -694,6 +741,14 @@ def bind_cfm_options(
         freeu_r_thresh=float(kwargs.get("freeu_r_thresh", 0.25)),
     )
     self.velocity_net.spall_cond_channels = 2 if self.use_spall_growth_mask else 0
+    self.velocity_net.layout_cond_channels = 1 if self.layout_cond else 0
+    if self.layout_cond and bool(kwargs.get("layout_zero_init", True)):
+        # Layout column sits right before the damage-mask column; zero-init so the net starts as without it.
+        # (--layout_zero_init False: keep the default init; for from-scratch training.)
+        with torch.no_grad():
+            weight = self.velocity_net.in_conv.weight
+            end = weight.shape[1] - (1 if self.use_damage_mask_condition else 0)
+            weight[:, end - 1:end].zero_()
     if self.freeze_trunk:
         for name, param in self.velocity_net.named_parameters():
             if not name.startswith("control."):

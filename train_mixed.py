@@ -186,6 +186,15 @@ def _load_spall_g_init(model, args):
         )
     elif velocity_init:
         _load_state_prefix(model.velocity_net, velocity_init, "velocity_net.")
+        if bool(getattr(model, "layout_cond", False)):
+            # ADMUNetCFM._load_from_state_dict inserts the missing layout column (zero) before the mask.
+            w = model.velocity_net.in_conv.weight
+            col = w.shape[1] - 1 - (1 if model.use_damage_mask_condition else 0)
+            print(
+                f"[train_mixed] layout_cond: in_conv {tuple(w.shape)}, layout column {col} "
+                f"|w|={float(w[:, col].abs().sum()):.3g} (0 = zero-init)",
+                flush=True,
+            )
     if mask_ckpt:
         if getattr(model, "spall_mask_head", None) is None:
             raise ValueError("spall_mask_ckpt requires use_spall_growth_mask")

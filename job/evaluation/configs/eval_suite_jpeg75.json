@@ -1,0 +1,95 @@
+{
+  "out_dir": "results/eval_suite/jpeg75",
+  "splits": [
+    "test",
+    "val"
+  ],
+  "k": 8,
+  "baseline": "base_raw",
+  "dino_model": "facebook/dinov3-vits16-pretrain-lvd1689m",
+  "extra_dino_models": [],
+  "remove_interference": false,
+  "models": [
+    {
+      "name": "V106C",
+      "npz": {
+        "test": "results/eval_suite/v106C/test/samples/v106C_6k.npz",
+        "val": "results/eval_suite/v106C/val/samples/v106C_6k.npz"
+      },
+      "jpeg_quality": 75
+    },
+    {
+      "name": "refiner",
+      "npz": {
+        "test": "results/eval_suite/v105/test/samples/refiner.npz",
+        "val": "results/eval_suite/v106/val/samples/refiner.npz"
+      },
+      "jpeg_quality": 75
+    },
+    {
+      "name": "base",
+      "npz": {
+        "test": "results/eval_suite/v105/test/samples/gn.npz",
+        "val": "results/eval_suite/v106/val/samples/gn.npz"
+      },
+      "jpeg_quality": 75
+    },
+    {
+      "name": "v11app",
+      "npz": {
+        "test": "results/eval_suite/v11_fog/test/samples/app_mean.npz",
+        "val": "results/eval_suite/v11_fog/val/samples/app_mean.npz"
+      },
+      "jpeg_quality": 75
+    },
+    {
+      "name": "v11appr",
+      "npz": {
+        "test": "results/eval_suite/v11app_refiner/test/samples/app_r_6k.npz",
+        "val": "results/eval_suite/v11app_refiner/val/samples/app_r_6k.npz"
+      },
+      "jpeg_quality": 75
+    },
+    {
+      "name": "V106C_raw",
+      "npz": {
+        "test": "results/eval_suite/v106C/test/samples/v106C_6k.npz",
+        "val": "results/eval_suite/v106C/val/samples/v106C_6k.npz"
+      }
+    },
+    {
+      "name": "refiner_raw",
+      "npz": {
+        "test": "results/eval_suite/v105/test/samples/refiner.npz",
+        "val": "results/eval_suite/v106/val/samples/refiner.npz"
+      }
+    },
+    {
+      "name": "base_raw",
+      "npz": {
+        "test": "results/eval_suite/v105/test/samples/gn.npz",
+        "val": "results/eval_suite/v106/val/samples/gn.npz"
+      }
+    },
+    {
+      "name": "v11app_raw",
+      "npz": {
+        "test": "results/eval_suite/v11_fog/test/samples/app_mean.npz",
+        "val": "results/eval_suite/v11_fog/val/samples/app_mean.npz"
+      }
+    },
+    {
+      "name": "v11appr_raw",
+      "npz": {
+        "test": "results/eval_suite/v11app_refiner/test/samples/app_r_6k.npz",
+        "val": "results/eval_suite/v11app_refiner/val/samples/app_r_6k.npz"
+      }
+    },
+    {
+      "name": "cGAN",
+      "npz": {
+        "test": "results/eval_suite/v106/test/progression_sel/cGAN_eq.npz"
+      }
+    }
+  ]
+}

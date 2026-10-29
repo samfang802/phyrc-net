@@ -21,8 +21,11 @@ DAMAGE_SCALARS = ("strength_ratio", "stiffness_ratio", "cum_energy", "log1p_max_
 N_DAMAGE_SCALARS = len(DAMAGE_SCALARS)
 
 
-def build_frame_conditions(encoder_run, exps, root="Data/Hysteresis"):
-    """{exp: torch.FloatTensor [n_points, z_dim + 4]} for the given specimens."""
+def build_frame_conditions(encoder_run, exps, root="Data/Hysteresis", scalars=True):
+    """{exp: torch.FloatTensor [n_points, z_dim + 4]} for the given specimens.
+
+    scalars=False (ablation v11_zonly, docs/ARCHITECTURE_UPDATE_V11.md 9.4): z only, [n_points, z_dim].
+    """
     from src.model.damage_state_encoder import DamageStateEncoder
 
     stats = {k: np.asarray(v, dtype=np.float32) for k, v in json.load(open(os.path.join(encoder_run, "stats.json"))).items()}
@@ -48,8 +51,12 @@ def build_frame_conditions(encoder_run, exps, root="Data/Hysteresis"):
                 reg[:, j["cum_energy"]],
                 np.log1p(it["tokens"][:, TOKEN_FEATURES.index("max_drift_so_far")]),
             ], axis=1).astype(np.float32)
-            per_peak = np.concatenate([z[0].numpy(), scal], axis=1)                       # [m, z+4]
-            before = np.concatenate([np.zeros(z.shape[2], np.float32), undamaged])[None]  # t < 30
+            if scalars:
+                per_peak = np.concatenate([z[0].numpy(), scal], axis=1)                       # [m, z+4]
+                before = np.concatenate([np.zeros(z.shape[2], np.float32), undamaged])[None]  # t < 30
+            else:
+                per_peak = z[0].numpy()                                                       # [m, z]
+                before = np.zeros((1, z.shape[2]), np.float32)
             table = np.concatenate([before, per_peak], axis=0)                            # index k = t // 30
             n_points = SEG * per_peak.shape[0] + 1
             k = np.arange(n_points) // SEG

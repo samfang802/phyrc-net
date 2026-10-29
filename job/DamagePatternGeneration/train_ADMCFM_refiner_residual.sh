@@ -55,7 +55,15 @@ if [[ "${V11}" == "True" ]]; then
     export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}" MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"   # 2 CPUs per job
     V11_ARGS=(--damage_condition_encoder "${V11_ENCODER}" --damage_scalar_dim 4 \
               --load_sign_condition True --flip_keeps_direction True)
-    echo "[train_ADMCFM] V11 refiner: encoder=${V11_ENCODER} base=${REFINER_BASE_CKPT}"
+    # Appearance-code base (ARCHITECTURE_UPDATE_V11.md §9.4): APP_CODE_DIM must match the base; unseen
+    # columns (val KID during training) get the mean code (-2) unless APP_UNSEEN_CODE says otherwise.
+    APP_CODE_DIM="${APP_CODE_DIM:-0}"
+    if [[ "${APP_CODE_DIM}" != "0" ]]; then
+        V11_ARGS+=(--app_code_dim "${APP_CODE_DIM}" --app_drop_prob "${APP_DROP_PROB:-0.2}" \
+                   --app_noise_std "${APP_NOISE_STD:-0.05}" --app_mix_prob "${APP_MIX_PROB:-0.0}" \
+                   --app_unseen_code "${APP_UNSEEN_CODE:--2}")
+    fi
+    echo "[train_ADMCFM] V11 refiner: encoder=${V11_ENCODER} base=${REFINER_BASE_CKPT} APP_CODE_DIM=${APP_CODE_DIM}"
 fi
 
 NUM_WORKERS="${NUM_WORKERS:-2}"

@@ -65,6 +65,12 @@ def _parse_args():
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--shared_noise", action="store_true", help="Same initial noise for all frames of a face (per k)")
     p.add_argument(
+        "--app_code",
+        default="null",
+        help="Appearance-code models only (docs/redesign/appearance_code.md): null | mean | seq:<i> (a training "
+        "sequence's code) | random (one training sequence per face of the column, drawn per k)",
+    )
+    p.add_argument(
         "--set",
         nargs="*",
         default=[],
@@ -85,6 +91,26 @@ def _apply_overrides(model, pairs):
                 continue
         setattr(model, key, val)
         print(f"[gen] {key}={val!r}", flush=True)
+
+
+def _app_code_column(mode, keys, n_seq, k, seed, key_ids):
+    """Value of the trailing sequence-index column for a batch (-1 null, -2 mean, i = training sequence i)."""
+    n = len(keys)
+    if mode == "null":
+        return np.full(n, -1.0, dtype=np.float32)
+    if mode == "mean":
+        return np.full(n, -2.0, dtype=np.float32)
+    if mode.startswith("seq:"):
+        i = int(mode.split(":", 1)[1])
+        if not 0 <= i < n_seq:
+            raise ValueError(f"app_code {mode}: only {n_seq} training sequences")
+        return np.full(n, float(i), dtype=np.float32)
+    if mode == "random":
+        out = np.empty(n, dtype=np.float32)
+        for r, key in enumerate(keys):
+            out[r] = np.random.default_rng(int(seed) * 7919 + k * 131 + key_ids[key]).integers(n_seq)
+        return out
+    raise ValueError(f"unknown --app_code {mode!r}")
 
 
 def _generate_refiner(cfm, dl, ds, K, seed, device):
@@ -133,6 +159,15 @@ def main():
     )
     if dataset_kwargs["use_damage_mask_condition"]:
         dataset_kwargs["use_object_loss_mask"] = False
+    if int(getattr(args, "app_code_dim", 0)) > 0 and bool(getattr(args, "use_refiner_residual", False)):
+        # The refiner walk reads the code from the dataset; only null / mean are supported there.
+        if cli.app_code not in ("null", "mean"):
+            raise ValueError(f"--app_code {cli.app_code} is not supported for refiner models (null | mean)")
+        dataset_kwargs["app_unseen_code"] = -1 if cli.app_code == "null" else -2
+    if cli.split == "train":
+        # Sampling on training frames: no training-time randomness in the conditions or the frame list.
+        dataset_kwargs.update(condition_perturb=False, train_virtual_repeat=1, g_traj_mix=False,
+                              share_photometric_aug=False, opa_lambda_ord=0.0, opa_lambda_mag=0.0)
     ds = PatternLoopDataset(
         root="./Data", mode=cli.split, transform=transform, extractor=extractor, extractor_args=extractor_args,
         **dataset_kwargs,
@@ -151,10 +186,15 @@ def main():
         cfm._get_cascade_stage1().to(device).eval()
 
     n = len(ds)
+    app_dim = int(getattr(args, "app_code_dim", 0))
+    app_n_seq = int(getattr(args, "app_num_seq", 8))
+    if app_dim > 0:
+        print(f"[gen] appearance code: {cli.app_code} (sequences {getattr(ds, 'app_seq_index', None)})", flush=True)
     fake, real, cond, DI = None, [], [], []
     if bool(getattr(cfm, "use_refiner_residual", False)):
         fake, real, cond, DI = _generate_refiner(cfm, dl, ds, int(cli.k), int(cli.seed), device)
     traj_key = ds.label["exp"].astype(str) + "/" + ds.label["direction"].astype(str)
+    key_ids = {key: j for j, key in enumerate(sorted(set(traj_key)))}
     with torch.no_grad():
         for k in range(0 if fake is not None else int(cli.k)):
             torch.manual_seed(int(cli.seed) + k)
@@ -171,6 +211,11 @@ def main():
                 )
                 if condition_mask is not None:
                     condition_mask = condition_mask.to(device)
+                if app_dim > 0:
+                    hidden_state = hidden_state.clone()
+                    hidden_state[:, -1] = torch.from_numpy(_app_code_column(
+                        cli.app_code, traj_key.iloc[row : row + real_data.shape[0]].tolist(), app_n_seq, k,
+                        cli.seed, key_ids))
                 if cli.shared_noise:
                     if bool(getattr(cfm, "use_cascade_sr", False)):
                         raise ValueError("--shared_noise is not implemented for the cascade sampler")
@@ -190,7 +235,8 @@ def main():
                 fake[row : row + len(u8), k] = u8
                 if k == 0:
                     real.append(to_uint8_gray(real_data))
-                    cond.append(hidden_state.reshape(hidden_state.shape[0], -1).float().cpu().numpy())
+                    hs = hidden_state[:, :-1] if app_dim > 0 else hidden_state  # keep the v11 layout of cond
+                    cond.append(hs.reshape(hs.shape[0], -1).float().cpu().numpy())
                     DI.append(di.view(-1).float().cpu().numpy())
                 row += len(u8)
 
@@ -202,6 +248,7 @@ def main():
         "seed": int(cli.seed),
         "ode_steps": int(getattr(cfm, "cfm_ode_steps", 0)),
         "overrides": list(cli.set),
+        "app_code": cli.app_code if app_dim > 0 else "",
         "shared_noise": bool(cli.shared_noise),
         "sampler": "refiner_sequence" if bool(getattr(cfm, "use_refiner_residual", False)) else "single_frame",
         "refiner_implicit": bool(getattr(cfm, "refiner_implicit", False)),

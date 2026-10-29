@@ -1,0 +1,51 @@
+{
+ "out_dir": "results/phase1_c2/eval_suite",
+ "splits": [
+  "test",
+  "val"
+ ],
+ "k": 8,
+ "baseline": "gn",
+ "dino_model": "facebook/dinov3-vits16-pretrain-lvd1689m",
+ "extra_dino_models": [
+  "facebook/dinov2-small"
+ ],
+ "remove_interference": false,
+ "models": [
+  {
+   "name": "gn",
+   "npz": {
+    "test": "results/eval_suite/v105/test/samples/gn.npz",
+    "val": "results/eval_suite/v106/val/samples/gn.npz"
+   }
+  },
+  {
+   "name": "gn_facfg",
+   "npz": {
+    "test": "results/eval_suite/phase0_guidance/test/samples/gn_facfg.npz",
+    "val": "results/eval_suite/phase0_guidance/val/samples/gn_facfg.npz"
+   }
+  },
+  {
+   "name": "c2",
+   "npz": {
+    "test": "results/phase1_c2/samples/c2_test.npz",
+    "val": "results/phase1_c2/samples/c2_val.npz"
+   }
+  },
+  {
+   "name": "c2_noprev",
+   "npz": {
+    "test": "results/phase1_c2/samples/c2_noprev_test.npz",
+    "val": "results/phase1_c2/samples/c2_noprev_val.npz"
+   }
+  },
+  {
+   "name": "iso32",
+   "npz": {
+    "test": "results/phase1_c2/samples/iso32_test.npz",
+    "val": "results/phase1_c2/samples/iso32_val.npz"
+   }
+  }
+ ]
+}

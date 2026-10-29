@@ -56,7 +56,8 @@ class PatternLoopDataset(Dataset):
             from .damage_condition import build_frame_conditions
 
             self.hidden_state = build_frame_conditions(
-                self.damage_condition_encoder, self.exp_list, root=os.path.join(self.root, "Hysteresis")
+                self.damage_condition_encoder, self.exp_list, root=os.path.join(self.root, "Hysteresis"),
+                scalars=bool(kwargs.get("damage_condition_scalars", True)),
             )
             dims = {e: tuple(v.shape) for e, v in self.hidden_state.items()}
             print(f"[PatternLoopDataset] damage-state condition from {self.damage_condition_encoder}: {dims}", flush=True)
@@ -69,12 +70,31 @@ class PatternLoopDataset(Dataset):
         # v11: the photographed faces are the two faces normal to the loading direction, so a
         # horizontal flip is an in-plane mirror: it changes neither the face nor the loading sign.
         self.flip_keeps_direction = bool(kwargs.get("flip_keeps_direction", False))
+        # Appearance code (docs/redesign/appearance_code.md): a trailing column of the physics vector holds the
+        # training-sequence index (column x face, sorted over the TRAIN list of the same data_path); frames of
+        # other columns (val / test) get -1 = null. The model turns it into a learned code.
+        self.app_code_dim = int(kwargs.get("app_code_dim", 0))
+        if self.app_code_dim > 0:
+            _all = json.load(open(os.path.join(self.root, "DamagePattern", data_path)))["train"]
+            _lab = pd.read_csv(os.path.join(self.root, "DamagePattern", "label.csv"))
+            _lab = _lab[_lab["filename"].isin(_all)]
+            seqs = sorted({(str(e), str(d)) for e, d in zip(_lab["exp"], _lab["direction"])})
+            self.app_seq_index = {s: i for i, s in enumerate(seqs)}
+            self.app_unseen_code = int(kwargs.get("app_unseen_code", -1))
+            print(f"[PatternLoopDataset] appearance code sequences: {self.app_seq_index}", flush=True)
         self.use_loss_mask = bool(kwargs.get("use_loss_mask", False))
         self.mask_dir = os.path.join(self.root, "DamagePattern", "mask")
         self.use_object_loss_mask = bool(kwargs.get("use_object_loss_mask", True))
         self.use_damage_mask_condition = bool(kwargs.get("use_damage_mask_condition", False))
         self.use_undamaged_ref = bool(kwargs.get("use_undamaged_ref", False))
         self.eval_real_condition_mask = bool(kwargs.get("eval_real_condition_mask", False))
+        # Phase-0 layout-oracle: AnyLabel spall SDF appended to the condition mask as channel 1.
+        self.layout_cond = bool(kwargs.get("layout_cond", False))
+        self.opa_pairs = self.mode == "train" and (
+            float(kwargs.get("opa_lambda_ord", 0.0)) > 0.0 or float(kwargs.get("opa_lambda_mag", 0.0)) > 0.0
+        )
+        self.layout_drop_prob = float(kwargs.get("layout_drop_prob", 0.2)) if self.mode == "train" else 0.0
+        self._layout = self._load_layout_cache(kwargs.get("layout_cache", "")) if self.layout_cond else None
         # Temporal AR pairing: same (exp, direction), previous timestep as image_prev.
         self.use_ar_temporal_pairing = bool(kwargs.get("use_ar_temporal_pairing", False)) or bool(
             kwargs.get("use_ar_self_conditioning", False)
@@ -227,6 +247,10 @@ class PatternLoopDataset(Dataset):
         if not torch.is_tensor(other):
             other = torch.as_tensor(other, dtype=hidden_state.dtype)
         return other.to(device=hidden_state.device, dtype=hidden_state.dtype)
+
+    def app_index(self, exp, direction):
+        """Appearance-code index of a frame: its training sequence, else ``app_unseen_code`` (-1 null, -2 mean)."""
+        return self.app_seq_index.get((str(exp), str(direction)), self.app_unseen_code)
 
     def _g_pca_path(self):
         return os.path.join(self.result_dir, "g_pca.npz")
@@ -436,6 +460,38 @@ class PatternLoopDataset(Dataset):
             return torch.ones((1, image.shape[-2], image.shape[-1]), dtype=image.dtype)
         return torch.ones((1, image.shape[-2], image.shape[-1]), dtype=image.dtype)
 
+    def _load_layout_cache(self, path):
+        path = str(path or "")
+        if not os.path.isabs(path) and not os.path.isfile(path):
+            path = os.path.join(self.root, "DamagePattern", os.path.basename(path))
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"layout_cond: SDF cache not found: {path} (scripts/export/export_anylabel_layout_sdf.py)")
+        z = np.load(path)
+        # NpzFile re-decompresses on every z["sdf"]; read once so each entry is a view of one array.
+        sdf = np.asarray(z["sdf"], dtype=np.float32)
+        table = {str(f): sdf[i] for i, f in enumerate(z["filename"])}
+        missing = [f for f in self.label["filename"] if f not in table]
+        print(
+            f"[PatternLoopDataset] layout_cond {self.mode}: {len(self.label) - len(missing)}/{len(self.label)} frames "
+            f"with layout from {path}; drop_prob={self.layout_drop_prob}"
+            + (f"; {len(missing)} missing → 0 (no layout)" if missing else ""),
+            flush=True,
+        )
+        return table
+
+    def _layout_tensor(self, filename, flipped, like):
+        """[1,H,W] SDF in [-1,1] (0 = no layout), flipped with the image; dropped with layout_drop_prob."""
+        h, w = like.shape[-2], like.shape[-1]
+        sdf = self._layout.get(str(filename))
+        if sdf is None or (self.layout_drop_prob > 0.0 and float(torch.rand(())) < self.layout_drop_prob):
+            return torch.zeros((1, h, w), dtype=like.dtype)
+        x = torch.from_numpy(np.asarray(sdf, dtype=np.float32))[None]
+        if tuple(x.shape[-2:]) != (h, w):
+            x = F.interpolate(x[None], size=(h, w), mode="bilinear", align_corners=False)[0]
+        if flipped:
+            x = torch.flip(x, dims=(-1,))
+        return x.to(dtype=like.dtype)
+
     def attach_state_cache(self, states):
         """``states``: {filename: (n, 1, H, W) tensor} of frozen-base samples, model units.
 
@@ -508,7 +564,13 @@ class PatternLoopDataset(Dataset):
         info = self._maybe_flip_info(info, flipped)
         hidden_state, info, DI = self._maybe_perturb_conditions(hidden_state, info, DI)
         hidden_state = self._apply_g_pca(hidden_state)
+        if self.app_code_dim > 0:
+            hidden_state = torch.cat([hidden_state, hidden_state.new_tensor([float(self.app_index(exp, direction))])])
         condition_mask = self._resolve_condition_mask(transformed_object_mask, object_mask, image)
+        if self.layout_cond:
+            if condition_mask is None:
+                raise ValueError("layout_cond needs use_damage_mask_condition (the layout rides on the condition mask)")
+            condition_mask = torch.cat([condition_mask, self._layout_tensor(filename, flipped, image)], dim=0)
 
         if not self.use_object_loss_mask:
             loss_mask = torch.ones((1, image.shape[-2], image.shape[-1]), dtype=image.dtype)
@@ -553,6 +615,12 @@ class PatternLoopDataset(Dataset):
 
         if not self.use_ar_temporal_pairing:
             sample = self._load_frame(filename, exp, direction, timestep, DI)
+            if self.opa_pairs:
+                # OPA-Flow: the model needs the frame name (earlier real frame of the same sequence) and the flip.
+                out = dict(sample)
+                out["filename"] = str(filename)
+                out["flipped"] = bool(sample["flipped"])
+                return out
             return self._pack_legacy_tuple(sample)
 
         # --- Temporal AR pack: target + previous frame (shared H-flip) ---

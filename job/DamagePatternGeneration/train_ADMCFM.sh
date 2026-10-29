@@ -174,10 +174,26 @@ if [[ "${V11}" == "True" ]]; then
     RESUME_CKPT="${RESUME_CKPT:-none}"
     V11_ARGS=(--load_sign_condition True --flip_keeps_direction True)
     # V11_ENCODER=none: ablation that keeps the GRU g and only adds the loading sign + flip fix.
-    [[ "${V11_ENCODER}" != "none" ]] && V11_ARGS+=(--damage_condition_encoder "${V11_ENCODER}" --damage_scalar_dim 4)
+    # V11_SCALARS=False: ablation v11_zonly, z only through the alpha gate (no damage scalars / e_d branch).
+    V11_SCALARS="${V11_SCALARS:-True}"
+    if [[ "${V11_ENCODER}" != "none" ]]; then
+        if [[ "${V11_SCALARS}" == "True" ]]; then
+            V11_ARGS+=(--damage_condition_encoder "${V11_ENCODER}" --damage_scalar_dim 4)
+        else
+            V11_ARGS+=(--damage_condition_encoder "${V11_ENCODER}" --damage_scalar_dim 0 --damage_condition_scalars False)
+        fi
+    fi
     echo "[train_ADMCFM] V11: encoder=${V11_ENCODER} load_sign=True flip_keeps_direction=True"
 fi
-RESUME_CKPT="${RESUME_CKPT:-results/DamagePatternGeneration/CFMADM/2026-10-17_17-13-26/Opensees Based damage Patterns Generation/41syx1zf/checkpoints/last.ckpt}"
+# Appearance code (docs/redesign/appearance_code.md): APP_CODE_DIM=8 adds a per-training-sequence learnable code
+# (own zero-init gate; code dropout / noise / mixup). Unset or 0 = off, the command line is unchanged.
+APP_CODE_DIM="${APP_CODE_DIM:-0}"
+APP_ARGS=()
+if [[ "${APP_CODE_DIM}" != "0" ]]; then
+    APP_ARGS=(--app_code_dim "${APP_CODE_DIM}" --app_drop_prob "${APP_DROP_PROB:-0.2}" --app_noise_std "${APP_NOISE_STD:-0.05}" --app_mix_prob "${APP_MIX_PROB:-0.0}")
+    echo "[train_ADMCFM] APP_CODE_DIM=${APP_CODE_DIM} drop=${APP_DROP_PROB:-0.2} noise=${APP_NOISE_STD:-0.05} mix=${APP_MIX_PROB:-0.0}"
+fi
+RESUME_CKPT="${RESUME_CKPT:-none}"
 [[ "${RESUME_CKPT}" == "none" ]] && RESUME_CKPT=""   # RESUME_CKPT=none: start from scratch
 if [[ -n "${RESUME_CKPT}" ]]; then
     if [[ ! -f "${RESUME_CKPT}" ]]; then
@@ -243,6 +259,7 @@ fi
         --extractor_path "${EXTRACTOR_PATH}" --use_wandb \
         "${RESUME_ARGS[@]}" \
         "${V11_ARGS[@]}" \
+        "${APP_ARGS[@]}" \
         --img_aug \
         --use_grayscale_input "${USE_GRAYSCALE_INPUT}" \
         --use_clahe "${USE_CLAHE}" --clahe_clip_limit "${CLAHE_CLIP_LIMIT}" \

@@ -50,7 +50,10 @@ def load_real_uint8(filenames, image_dir, image_size=128, use_clahe=True, clip_l
     )
     out = np.empty((len(filenames), image_size, image_size), dtype=np.uint8)
     for i, name in enumerate(filenames):
-        x = tf(Image.open(os.path.join(image_dir, name)).convert("RGB"))
+        path = os.path.join(image_dir, name)
+        if not os.path.exists(path):  # id lists name .jpg; a lossless reference dir holds <stem>.png
+            path = os.path.join(image_dir, os.path.splitext(name)[0] + ".png")
+        x = tf(Image.open(path).convert("RGB"))
         out[i] = torch.round(torch.clamp(x[0], 0.0, 1.0) * 255.0).to(torch.uint8).numpy()
     return out
 

@@ -162,7 +162,7 @@ Both variants use a frozen single-frame model as the "base" (`chjqbp9m`, loaded 
 
 ### 3.2 Variant A: paired bridge with a model-generated start
 
-Reuse the paired bridge (`docs/PAIRED_BRIDGE.md`) and change only where the bridge start comes from.
+Reuse the paired bridge (`docs/archive/PAIRED_BRIDGE.md`) and change only where the bridge start comes from.
 
 ```
 S_prev = frozen single-frame model sample for the previous frame
@@ -293,7 +293,7 @@ Variant B job: `job/DamagePatternGeneration/train_ADMCFM_refiner_residual.sh` (3
 
 The residual form adds to `S_{t-1}` and so inherits its brightness. The bridge form inherits it along the integration path. Neither has a built-in fix. What exists:
 
-- A sampling-time corrector for the bridge (`_bridge_correct_frame`, see `docs/TEMPORAL_FINAL.md`): re-noise to `s = 0.35`, re-draw with the frozen single-frame model, take high frequency from the first frame, and pull a dark global mean back. Its recorded result keeps mean gray stable (about 142-151) but the dark bottom region still widens over time.
+- A sampling-time corrector for the bridge (`_bridge_correct_frame`, see `docs/archive/TEMPORAL_FINAL.md`): re-noise to `s = 0.35`, re-draw with the frozen single-frame model, take high frequency from the first frame, and pull a dark global mean back. Its recorded result keeps mean gray stable (about 142-151) but the dark bottom region still widens over time.
 
 Options not implemented: photometric augmentation on `S_{t-1}` only, low-frequency anchoring to a single-frame sample at the same `g`, longer chains in training. First step should be a measurement: mean gray and dark-area curves over time for GT, single-frame direct and the refiner chain.
 

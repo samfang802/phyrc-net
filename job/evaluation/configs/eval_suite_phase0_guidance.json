@@ -1,0 +1,19 @@
+{
+  "out_dir": "results/eval_suite/phase0_guidance",
+  "splits": ["test", "val"],
+  "k": 8,
+  "baseline": "gn",
+  "dino_model": "facebook/dinov3-vits16-pretrain-lvd1689m",
+  "extra_dino_models": ["facebook/dinov2-small"],
+  "remove_interference": false,
+  "models": [
+    {"name": "gn", "result_dir": "results/DamagePatternGeneration/CFMADM/1024-dadaGNsplit", "checkpoint": "results/DamagePatternGeneration/CFMADM/1024-dadaGNsplit/Opensees Based damage Patterns Generation/chjqbp9m/checkpoints/last.ckpt"},
+    {"name": "gn_facfg", "npz": {"test": "results/eval_suite/phase0_guidance/test/samples/gn_facfg.npz", "val": "results/eval_suite/phase0_guidance/val/samples/gn_facfg.npz"}},
+    {"name": "gn_ag", "result_dir": "results/DamagePatternGeneration/CFMADM/1024-dadaGNsplit", "checkpoint": "results/DamagePatternGeneration/CFMADM/1024-dadaGNsplit/Opensees Based damage Patterns Generation/chjqbp9m/checkpoints/last.ckpt",
+     "set": ["autoguide_checkpoint=results/DamagePatternGeneration/CFMADM/2026-10-12_03-59-39_autoguide_bad/checkpoint_step_006000.pt", "autoguide_result_dir=results/DamagePatternGeneration/CFMADM/2026-10-12_03-59-39_autoguide_bad",
+             "autoguide_weight=0.5", "autoguide_gamma=4.0", "autoguide_eta=1.0"]},
+    {"name": "gn_apg", "result_dir": "results/DamagePatternGeneration/CFMADM/1024-dadaGNsplit", "checkpoint": "results/DamagePatternGeneration/CFMADM/1024-dadaGNsplit/Opensees Based damage Patterns Generation/chjqbp9m/checkpoints/last.ckpt", "set": ["apg_guidance_scale=2.0"]},
+    {"name": "gn_hp", "result_dir": "results/DamagePatternGeneration/CFMADM/1024-dadaGNsplit", "checkpoint": "results/DamagePatternGeneration/CFMADM/1024-dadaGNsplit/Opensees Based damage Patterns Generation/chjqbp9m/checkpoints/last.ckpt",
+     "set": ["coord_guidance_scale=2.0", "coord_guidance_hipass_sigma=2.0", "coord_guidance_t_max=0.55"]}
+  ]
+}

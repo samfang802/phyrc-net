@@ -1,0 +1,34 @@
+{
+  "out_dir": "results/eval_suite/v11app_refiner",
+  "splits": ["test", "val"],
+  "k": 8,
+  "baseline": "v11r_6k",
+  "dino_model": "facebook/dinov3-vits16-pretrain-lvd1689m",
+  "extra_dino_models": [],
+  "remove_interference": false,
+  "models": [
+    {"name": "app_r_6k",
+     "result_dir": "results/DamagePatternGeneration/CFMADM/2026-10-26_12-45-16_v11app_refiner",
+     "checkpoint": "results/DamagePatternGeneration/CFMADM/2026-10-26_12-45-16_v11app_refiner/checkpoint_step_006000.pt",
+     "app_code": "mean"},
+    {"name": "app_r_12k",
+     "result_dir": "results/DamagePatternGeneration/CFMADM/2026-10-26_12-45-16_v11app_refiner",
+     "checkpoint": "results/DamagePatternGeneration/CFMADM/2026-10-26_12-45-16_v11app_refiner/checkpoint_step_012000.pt",
+     "app_code": "mean"},
+    {"name": "v11r_6k",
+     "npz": {
+       "test": "results/eval_suite/v11_refiner/test/samples/v11r_6k.npz",
+       "val": "results/eval_suite/v11_refiner/val/samples/v11r_6k.npz"
+     }},
+    {"name": "app_15k_mean",
+     "npz": {
+       "test": "results/eval_suite/v11_fog/test/samples/app_mean.npz",
+       "val": "results/eval_suite/v11_fog/val/samples/app_mean.npz"
+     }},
+    {"name": "gn",
+     "npz": {
+       "test": "results/eval_suite/v105/test/samples/gn.npz",
+       "val": "results/eval_suite/v106/val/samples/gn.npz"
+     }}
+  ]
+}

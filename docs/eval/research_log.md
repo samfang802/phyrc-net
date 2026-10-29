@@ -1,6 +1,10 @@
 # 研究筆記：DINOv3 KID 與其他指標的發展過程
 
 > 這是評估指標從無到有的原始筆記，依時間順序記錄每一次實驗和修正。**較早章節的數字有些已被更正**（SE 低估、演進幅度的偏差等），整理後的說明與目前的結果請看 [README.md](README.md) 和 [results.md](results.md)。
+>
+> 這份筆記裡所有用到 R_spall 的數字（probe R²、`probe_spall_top`、`kid_by_spall` 的分層）都是用舊的 `r_spall.csv` 算的，沒有改。2026-10-25 起預設改用人工剝落多邊形 `anylabel_r_spall.csv`，重算後的 test 數字見 [results.md](results.md) 的 probe 一節（例如 gn 的 R_spall R² 0.39 → 0.59，真實圖上限 0.88 → 0.96）。
+>
+> 2026-10-28 以前的 DINOv3 指標都沒有做 JPEG 對齊（參考集是 JPEG，生成圖不是），我們模型的 KID 因此偏高，「cGAN 的 KID 最好」也不成立。經過見本筆記最後一節，對齊後的數字見 [results.md](results.md)。
 
 用 DINOv3 抽特徵，再用不偏的 MMD² 比較生成圖和真實圖。目的是在 test 只有 124 張（CTR1 一根柱）的情況下，仍能客觀比較不同模型，並附上誤差與顯著性。
 
@@ -537,6 +541,14 @@ DINOv3 只能說差多遠，不能說差在哪裡。這一節把目視看到的�
   - 門檻是像素層級的手工定義，無法分辨「白色碎塊」和「白色塗漆」。
   - R307 低 DI 的大量 white，是補圖在干擾物位置留下的亮塊，不是剝落，所以 R307 那一列的 share 不可用。
   - cGAN 只有 K = 1，沒有做組內迴歸。
+
+### 2026-10-28：參考集是 JPEG，生成圖沒有（`jpeg_quality`）
+
+- **起因**：在 DINOv3 特徵裡找到一個「離開 CTR1」的方向。我們的模型都落在 −2.2 到 −2.5，cGAN 和真實圖接近 0，和損傷內容無關。
+- **原因**：補圖版參考集（train、val、test）和 cGAN 的存檔圖都是 128×128 JPEG，量化表相同，約為 PIL quality 75（`export_inpaint_dataset.py` 用 PIL 預設存 `.jpg`）。我們的生成圖直接存進 npz，沒有壓縮。
+- **驗證**：把生成圖做一次 JPEG q75，偏移縮到 −0.3 到 −0.6。之後在 `eval_dinov3_kid.py` 加 `--jpeg NAME=QUALITY`、suite 加每個模型的 `"jpeg_quality"`，跑 `eval_suite_jpeg75.json`（每個模型列兩次：對齊 / 原樣）。test KID：V106C 0.137 → 0.094、refiner 0.164 → 0.113、base 0.195 → 0.138、v11appr 0.128 → 0.090，cGAN 0.112 不變。v11appr、V106C 對 cGAN 的 z ≈ −2.8，refiner 打平。
+- **反向檢查**：把參考集重建成無損 PNG（`TASK=export_inpaint_png`，`eval_suite_pngref.json`），生成圖不動。這時換 cGAN 吃虧，結論一樣：v11appr、V106C 贏 cGAN（z = −4.1、−3.9），refiner 分不開，base 輸。
+- **結論**：「cGAN 的 KID 最好」主要是壓縮痕跡，不是 KID 的盲點。我們模型之間的排名不變。主結果改用 JPEG 對齊，PNG 參考集當穩健性檢查。這之前本筆記裡所有 DINOv3 指標（KID、鄰居對比、演進）都沒有對齊。整理後的數字見 [results.md](results.md)，做法見 [protocol.md](protocol.md#參考集是-jpeg生成圖也要過一次-jpeg)。
 
 ## 用法
 

@@ -8,7 +8,10 @@
 # Contents (paths are kept, so extracting in the repo root puts everything in place;
 # Data/DamagePattern/{images,mask,label.csv,id_list*.json} are already in git):
 #   Data/DamagePattern_inpaint_selfcondnoDI/images   inpainted reference set (eval reference)
-#   Data/DamagePattern/r_spall.csv   per-frame R_spall labels (the probe and kid_by_spall)
+#   Data/DamagePattern/anylabel_r_spall.csv   per-frame R_spall labels from the hand-drawn spall polygons
+#       (the probe and kid_by_spall; src/metrics/spall_labels.py)
+#   Data/DamagePattern/r_spall.csv   older R_spall labels, only to reproduce numbers before 2026-10-25
+#       (--r_spall_csv old)
 #   results/InterferenceDetector/v1/{best.pt,backbone_config.json,metrics.json}   interference detector
 #       (best.pt holds its fine-tuned DINOv3 weights, backbone_config.json the architecture, so it
 #       loads without Hugging Face access)
@@ -26,6 +29,7 @@ OUT="${1:-dist}"
 mkdir -p "${OUT}"
 FILES=(
     Data/DamagePattern_inpaint_selfcondnoDI/images
+    Data/DamagePattern/anylabel_r_spall.csv
     Data/DamagePattern/r_spall.csv
     results/InterferenceDetector/v1/best.pt
     results/InterferenceDetector/v1/backbone_config.json

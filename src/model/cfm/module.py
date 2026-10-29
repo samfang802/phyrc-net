@@ -5,6 +5,7 @@ import lightning.pytorch as pl
 from src.model.cfm.condition_mixin import CFMConditionMixin
 from src.model.cfm.inference_mixin import CFMInferenceMixin
 from src.model.cfm.lifecycle_mixin import CFMLifecycleMixin
+from src.model.cfm.opa_mixin import CFMOPAMixin
 from src.model.cfm.options import bind_cfm_options
 from src.model.cfm.patch_mixin import CFMPatchMixin
 from src.model.cfm.sampling_mixin import CFMSamplingMixin
@@ -18,6 +19,7 @@ class CFMADM(
     CFMConditionMixin,
     CFMInferenceMixin,
     CFMTrainingMixin,
+    CFMOPAMixin,
     pl.LightningModule,
 ):
     def __init__(
