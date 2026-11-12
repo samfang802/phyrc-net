@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Re-score finished eval suites with the JPEG-aligned DINOv3 metrics, reusing their samples.
 
-The reference set is JPEG q75 and our samples are not (docs/eval/protocol.md). For every
+The reference set is JPEG q75 and our samples are not (docs/eval/archive/protocol.md). For every
 <suite>/<split>/kid/dinov3_kid.json this reruns eval_dinov3_kid.py on the same npz files with the
 same reference, R_spall labels and normalization, plus --jpeg NAME=Q for every model that is not
 already JPEG (cGAN archives are skipped). Output goes next to the original:

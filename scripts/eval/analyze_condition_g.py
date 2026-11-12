@@ -11,7 +11,7 @@ For the six imaged specimens (train R315/R330/R615/R1015, val R307, test CTR1):
   6. how much g_t depends on the loop after t (stacked bidirectional GRU)
   7. Δg between consecutive labelled frames of one face
 Report: <out>/report.txt, per-frame table: <out>/frames.csv, figure: <out>/condition_g.png.
-Doc: docs/eval/condition_g.md.
+Doc: docs/eval/archive/condition_g.md.
 
   python scripts/eval/analyze_condition_g.py results/condition_g_anylabel   (old labels: results/condition_g --r_spall_csv old)
 R_spall labels: src/metrics/spall_labels.py (default anylabel_r_spall.csv; 'old' = r_spall.csv, before 2026-10-25).

@@ -4,7 +4,7 @@
 Inputs are npz files from generate_eval_samples.py (or any script using save_samples_npz).
 Reference = the images in --image_dir for the npz rows (test split by default); all npz must share the rows.
 Backbone: DINOv3 ViT-S/16 by default (gated on Hugging Face); --dino_model facebook/dinov2-small
-is public and ranked the models nearly the same on test and val (docs/eval/distribution.md).
+is public and ranked the models nearly the same on test and val (docs/eval/archive/distribution.md).
 
 Per model:
   kid_global       KID on [CLS ; mean patch], block U-statistic. Every SE here is a leave-one-block-out
@@ -60,6 +60,8 @@ from itertools import combinations
 import numpy as np
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+# One cache for every suite. The key is the image bytes, so a baseline scored yesterday is not embedded again.
+SHARED_CACHE = os.path.join("results", "eval_suite", "feature_cache")
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
@@ -95,6 +97,8 @@ def _parse_args():
     p.add_argument("--jpeg", nargs="*", default=[], metavar="NAME=QUALITY",
                    help="JPEG round-trip (PIL quality) of these models' samples before features, to match a JPEG reference")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--cache_dir", default=SHARED_CACHE,
+                   help="Shared feature cache, keyed by image bytes. Empty string stores it inside --out_dir.")
     spall_labels.add_arg(p)
     p.add_argument("--device", default="cuda")
     return p.parse_args()
@@ -129,11 +133,12 @@ def _model_slug(model_id):
 
 
 class _Cache:
-    def __init__(self, extractor, out_dir, n_patch, seed, normalize="none"):
+    def __init__(self, extractor, out_dir, n_patch, seed, normalize="none", cache_dir=None):
         # One directory per backbone so ViT-S and ViT-B caches cannot collide.
         # Patch indices are deterministic, so the seed is not part of the cache key.
         slug = _model_slug(extractor.model_id)
-        self.fx, self.dir, self.n_patch, self.seed = extractor, os.path.join(out_dir, "feature_cache", slug), n_patch, seed
+        root = cache_dir or os.path.join(out_dir, "feature_cache")
+        self.fx, self.dir, self.n_patch, self.seed = extractor, os.path.join(root, slug), n_patch, seed
         self.normalize = normalize
         os.makedirs(self.dir, exist_ok=True)
 
@@ -144,10 +149,15 @@ class _Cache:
         key = hashlib.md5(u8.tobytes() + f"{self.n_patch}".encode()).hexdigest()
         path = os.path.join(self.dir, key + ".npz")
         if os.path.isfile(path):
-            z = np.load(path)
-            return z["g"], (z["p"] if self.n_patch > 0 else None)
+            try:
+                z = np.load(path)
+                return z["g"], (z["p"] if self.n_patch > 0 else None)
+            except Exception:
+                pass
         g, p = self.fx(u8, n_patch=self.n_patch, seed=self.seed)
-        np.savez(path, g=g, **({"p": p} if p is not None else {}))
+        tmp = path[:-4] + ".part.npz"
+        np.savez(tmp, g=g, **({"p": p} if p is not None else {}))
+        os.replace(tmp, path)
         return g, p
 
 
@@ -253,7 +263,7 @@ def main():
 
     model_id = cli.dino_model or cli.dino_model_id
     fx = dm.DinoFeatures(model_id, device=cli.device)
-    feats = _Cache(fx, cli.out_dir, cli.n_patch, cli.seed, cli.normalize)
+    feats = _Cache(fx, cli.out_dir, cli.n_patch, cli.seed, cli.normalize, cache_dir=cli.cache_dir or None)
     real_g, real_p = feats(real_u8)
     sigma = dm.median_distance(real_g)
     tert = np.quantile(DI, [1 / 3, 2 / 3])
@@ -267,7 +277,7 @@ def main():
     report = {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "dino_model_id": model_id,
-        "feature_cache": os.path.join(cli.out_dir, "feature_cache", _model_slug(model_id)),
+        "feature_cache": feats.dir,
         "prdc_degraded": True,
         "prdc_note": (
             "PRDC is kept for compatibility but excluded from the comparison table: "

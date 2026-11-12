@@ -1,0 +1,54 @@
+{
+  "out_dir": "results/eval_suite/v12",
+  "splits": [
+    "test",
+    "val"
+  ],
+  "k": 8,
+  "baseline": "app_r_6k",
+  "dino_model": "facebook/dinov3-vits16-pretrain-lvd1689m",
+  "extra_dino_models": [],
+  "remove_interference": false,
+  "models": [
+    {
+      "name": "app_r_6k",
+      "npz": {
+        "test": "results/eval_suite/v11app_refiner/test/samples/app_r_6k.npz",
+        "val": "results/eval_suite/v11app_refiner/val/samples/app_r_6k.npz"
+      },
+      "jpeg_quality": 75
+    },
+    {
+      "name": "v12___STEP___none",
+      "npz": {
+        "test": "results/eval_suite/v12/test/samples/v12___STEP___none.npz",
+        "val": "results/eval_suite/v12/val/samples/v12___STEP___none.npz"
+      },
+      "jpeg_quality": 75
+    },
+    {
+      "name": "v12___STEP___drift",
+      "npz": {
+        "test": "results/eval_suite/v12/test/samples/v12___STEP___drift.npz",
+        "val": "results/eval_suite/v12/val/samples/v12___STEP___drift.npz"
+      },
+      "jpeg_quality": 75
+    },
+    {
+      "name": "v12___STEP___hspP",
+      "npz": {
+        "test": "results/eval_suite/v12/test/samples/v12___STEP___hspP.npz",
+        "val": "results/eval_suite/v12/val/samples/v12___STEP___hspP.npz"
+      },
+      "jpeg_quality": 75
+    },
+    {
+      "name": "v12___STEP___iso32",
+      "npz": {
+        "test": "results/eval_suite/v12/test/samples/v12___STEP___iso32.npz",
+        "val": "results/eval_suite/v12/val/samples/v12___STEP___iso32.npz"
+      },
+      "jpeg_quality": 75
+    }
+  ]
+}

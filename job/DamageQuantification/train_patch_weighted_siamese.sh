@@ -66,7 +66,7 @@ else
 fi
 EXTRA_ARGS+=(--no-use_mask)
 
-"${NICE_CMD[@]}" python3 -u train_patch_weighted_siamese.py \
+"${NICE_CMD[@]}" python3 -u -m quantification.train_patch_weighted_siamese \
   --lr "${LR}" \
   --epoch "${EPOCH}" \
   --batch_size "${BATCH_SIZE}" \

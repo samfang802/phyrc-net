@@ -1,9 +1,10 @@
-# 損傷影像生成的評估指標
+# 損傷影像生成的評估
 
-這個資料夾說明如何客觀評估 RC 柱損傷影像生成器，涵蓋三件事：
+這個資料夾說明如何客觀評估 RC 柱損傷影像生成器，涵蓋四件事：
 
 - 生成圖像不像真的；
 - 有沒有跟著條件（遲滯、DI、drift）畫出對的損傷；
+- 是不是照搬訓練柱；
 - 失敗時是哪一種失敗。
 
 所有指標都針對這個資料的限制設計：
@@ -12,47 +13,17 @@
 - 相鄰幀幾乎相同。
 - GT 上有實驗器材（干擾物），生成器不會畫。
 
-## 先看這張表
+## 文件
 
-| 指標 | 回答的問題 | 會看條件嗎 | 說明 |
-|---|---|---|---|
-| `kid_global`、`kid_patch`、`mmd_rbf_global` | 整體看起來像不像真實照片 | **不會** | [distribution.md](distribution.md) |
-| `probe`（DI、R_spall） | 從圖讀得出條件該有的損傷程度嗎 | 會 | [condition.md](condition.md#線性-probe) |
-| `nbr_global`、`nbr_patch` | 生成圖比較像 GT 附近的真實幀，還是別的幀 | 會 | [condition.md](condition.md#gt-鄰居對比) |
-| `progression_global`、`progression_patch` | drift 變大時，損傷有沒有跟 GT 一樣地長出來 | 會 | [condition.md](condition.md#損傷演進) |
-| `damage_texture`（灰霧、白塊、裂縫） | 畫的是哪一種損傷；有沒有沿用訓練柱的裂縫 | 部分 | [damage_texture.md](damage_texture.md) |
-| `flicker`、`tone_jump`、`persistence`、`crack_keep` | 照時間排起來像不像真實的加載過程：會不會閃、損傷會不會消失 | 不會 | [temporal.md](temporal.md) |
-| `interference` | 生成圖畫了多少干擾物 | — | [interference.md](interference.md) |
-| `saturated_frames` | 爆白、爆黑的偽影比例 | — | [distribution.md](distribution.md#附帶的偽影統計) |
-| `memorization` | 有沒有背訓練圖 | — | [distribution.md](distribution.md#背圖檢查) |
-
-**最重要的一點：KID 不看條件。** 把生成圖隨機換到別的條件，KID 不變。所以 KID 只能回答「像不像真的」，不能回答「這個 DI 該有的剝落有沒有畫出來」。後者要看條件指標。
-
-## 建議的報告組合
-
-比較兩個模型時，至少報告下面這些。所有數字都附 SE 和配對比較的 z。
-
-1. **真實感**：`kid_global` 和 `kid_patch`。生成圖要先做 JPEG q75 對齊，因為參考集是 JPEG（[protocol.md](protocol.md#參考集是-jpeg生成圖也要過一次-jpeg)）。
-2. **條件一致性**：
-   - `progression_global` 的 `corr`：目前唯一在兩根留出柱上都分得開模型的指標。
-   - `nbr_global`，附上 `frac_of_ceiling`。
-3. **失敗型態**：
-   - `damage_texture` 高 DI 區間的 `fog_share`、`white_share`、`E_damage`；
-   - 低 DI 的 `before_loading` 和 `copy_excess`。
-4. **缺陷**：`interference`、`saturated_frames`。
-5. **刻度**：每個指標旁邊列出參考列，例如「換一根真實柱」能達到多少。沒有刻度，數字無法解讀。
-
-不要拿來下結論的數字：
-
-- `prdc`：單一柱的參考集讓它退化成 0。
-- `kid_soft_di`：沒通過打亂檢查。
-- 用 val（R307）算的 R_spall probe：R307 剝落很少（8% 時約 0.17）。
-
-原因見各指標文件。
+| 文件 | 內容 |
+|---|---|
+| [metrics.md](metrics.md) | **定案的指標**：每個指標的問題、算法、刻度、怎麼讀；共同設定（切分、影像域、不確定度） |
+| [results.md](results.md) | **目前的結果**：每個版本一個 checkpoint，加上 cGAN |
+| [archive/](archive/) | 指標的設計過程與舊結果，見[下方](#封存的文件) |
 
 ## 安裝
 
-1. **程式與資料**：clone 這個 repo。`Data/DamagePattern/`（GT 影像、`label.csv`、切分檔、SAM 遮罩）已經在 git 裡。
+1. **程式與資料**：clone 這個 repo。`Data/DamagePattern/` 的 `label.csv`、切分檔、SAM 遮罩在 git 裡；GT 原始照片（`images/`）沒有進 git，要另外放進去。
 2. **環境**：conda 環境 `internship`。目前驗證過的版本：
 
    | 套件 | 版本 |
@@ -70,59 +41,70 @@
 
    壓縮檔內含（約 380 MB）：
    - 補圖版參考集 `Data/DamagePattern_inpaint_selfcondnoDI/images`；
-   - 每幀的剝落比例標籤 `Data/DamagePattern/anylabel_r_spall.csv`（人工剝落多邊形，2026-10-25 起的預設，`src/metrics/spall_labels.py`）；舊的 `r_spall.csv` 也一起打包，只用來重現舊數字（`--r_spall_csv old`）；
+   - 每幀的剝落比例標籤 `Data/DamagePattern/anylabel_r_spall.csv`（人工剝落多邊形，`src/metrics/spall_labels.py`）；舊的 `r_spall.csv` 也一起打包，只用來重現舊數字（`--r_spall_csv old`）；
    - 干擾物偵測器 `results/InterferenceDetector/v1/best.pt` 與 `backbone_config.json`；
    - 去干擾物用的 CFM 補圖模型（V9 `selfcondnoDI` 的 `args.json` 和 `last.ckpt`，和做參考集的是同一個）；
    - 補圖模型條件需要的 GRU extractor `phase1_extractor/`。
 
-   維護者用 `bash scripts/eval/pack_eval_assets.sh` 產生它。偵測器的 DINOv3 權重已經在 `best.pt` 裡，`backbone_config.json` 是架構設定，所以載入偵測器不需要 Hugging Face 權限。
+   維護者用 `bash scripts/eval/pack_eval_assets.sh` 產生它。偵測器的 DINOv3 權重已經在 `best.pt` 裡，所以載入偵測器不需要 Hugging Face 權限。
 
 4. **指標用的 backbone**，二選一：
    - **DINOv3**（預設，和既有數字可比）：`facebook/dinov3-vits16-pretrain-lvd1689m` 在 Hugging Face 需要申請，權限綁帳號。先到模型頁面同意授權，再執行 `huggingface-cli login`。
-   - **DINOv2**（不用申請）：在設定檔寫 `"dino_model": "facebook/dinov2-small"`。模型排名和主要結論跟 DINOv3 一致（[distribution.md](distribution.md#backbone-的選擇)），但數字不能和 DINOv3 的直接比較。
+   - **DINOv2**（不用申請）：在設定檔寫 `"dino_model": "facebook/dinov2-small"`。模型排名和主要結論跟 DINOv3 一致（[archive/distribution.md](archive/distribution.md#backbone-的選擇)），但數字不能和 DINOv3 的直接比較。
 
-   第一次執行時會下載到快取，之後 `eval_suite.sh` 預設 `HF_HUB_OFFLINE=1` 離線執行；第一次要用 `qsub -v HF_HUB_OFFLINE=0`。登入的 token 過期時，連公開模型也會下載失敗，`huggingface-cli logout` 或重新登入即可。
-5. **GRU extractor**（`./phase1_extractor`）已經在壓縮檔裡：去干擾物和用本 repo 的模型生成都要用它。`prepare_extractor_from_hf.sh` 下載的 Hugging Face repo 是私人的，只有擁有者能用。
+   第一次執行時會下載到快取，之後 job 預設 `HF_HUB_OFFLINE=1` 離線執行；第一次要用 `qsub -v HF_HUB_OFFLINE=0`。登入的 token 過期時，連公開模型也會下載失敗，`huggingface-cli logout` 或重新登入即可。
+5. **GRU extractor**（`./phase1_extractor`）已經在壓縮檔裡：去干擾物和用本 repo 的模型生成都要用它。
 
-## 一條指令跑完
+## 執行
 
-1. 編輯模型清單 `job/evaluation/configs/eval_suite_models.json`。格式見 `scripts/eval/run_eval_suite.py` 開頭的說明，每個模型可以是下面三種之一：
+主結果（[results.md](results.md)）用這兩個 job 產生：
+
+```bash
+qsub job/evaluation/eval_cgan_clahe.sh   # cGAN 轉到參考集的影像域（只需一次）
+qsub job/evaluation/eval_final.sh        # suite（test + val）+ 抄襲與多樣性（test）
+```
+
+評估新模型的步驟：
+
+1. 在 suite 設定檔（例如複製 `job/evaluation/configs/eval_suite_final.json`）加一個模型。格式見 `scripts/eval/run_eval_suite.py` 開頭的說明，每個模型可以是下面三種之一：
    - 本 repo 的 CFM run：填 `result_dir` 和 `checkpoint`；
    - 一個存好的圖檔資料夾：填 `images`；
    - 一個做好的 npz：填 `npz`。
-
-   沒有經過 JPEG 的模型（本 repo 的模型都是）要加 `"jpeg_quality": 75`；cGAN 這類本來就存成 JPEG 的不要加。原因見 [protocol.md](protocol.md#參考集是-jpeg生成圖也要過一次-jpeg)。
-2. 執行：
+2. **影像域要和參考集一致**（[metrics.md](metrics.md#參考集與影像域)）：
+   - 本 repo 的模型輸出已經是 CLAHE 域，加 `"jpeg_quality": 75`。
+   - 輸出原始照片影像域的模型（例如 cGAN），加 `"clahe": true` 和 `"jpeg_quality": 75`。這類模型通常會畫干擾物，設定檔最上層的 `"remove_interference"` 要開著（預設就是開的）。
+3. 執行 suite：
 
    ```bash
-   qsub job/evaluation/eval_suite.sh                  # PBS
-   # 或直接在有 GPU 的機器上
-   CUDA_VISIBLE_DEVICES=0 python scripts/eval/run_eval_suite.py --config job/evaluation/configs/eval_suite_models.json
+   CUDA_VISIBLE_DEVICES=0 python scripts/eval/run_eval_suite.py --config <config.json>
+   # 篩選用，只跑 test 的 KID（樣本還是會生成）：
+   python scripts/eval/run_eval_suite.py --config <config.json> --quick
    ```
 
-3. 看結果：`<out_dir>/summary.md`，每個 split 一份報告，裡面是所有指標的比較表和配對 z。各步驟的 log 在 `<out_dir>/logs/`。
+   結果在 `<out_dir>/<split>/summary.md`，各步驟的 log 在 `<out_dir>/logs/`。同一份模型清單再跑會跳過。DINOv3 特徵存在 `results/eval_suite/feature_cache`，已經算過的圖不會再抽一次。
+4. 抄襲與多樣性指標不在 suite 裡，另外跑 `scripts/eval/eval_diversity.py`（參數見 `job/evaluation/eval_final.sh`）。輸入是 suite 產生的 npz，每個模型要給同樣的 `--jpeg`；需要 CLAHE 的模型列在 `--clahe`。
 
 說明：
 
 - **開始前會先檢查**：參考集、偵測器、backbone 權限、checkpoint 都在不在。缺什麼會直接說，不會跑到一半才失敗。
-- **第二個 backbone**：`"extra_dino_models": ["facebook/dinov2-small"]` 會用 DINOv2 再算一次真實感與條件指標（`kid_dinov2-small/`），摘要裡多一張「換 backbone 的穩健性檢查」表。範例設定檔預設開著；主表和第二張表的排名不一致時，那個結論不要下。
-- **可以續跑**：中斷後再送一次，已完成的步驟會跳過；`FORCE=1`（或 `--force`）全部重做。加新模型時只會補跑新模型的生成和去干擾物，三種評估會重跑，因為所有模型要放在同一次評估裡比。
+- **可以續跑**：中斷後再送一次，已完成而且模型清單沒變的步驟會跳過；`--force` 全部重做。模型清單變了，三種評估會重跑，因為所有模型要放在同一次評估裡比。生成和去干擾物只補還沒有的。
+- **篩選**：`--quick`（job 用 `QUICK=1`）只跑 test 的 KID。要定案數字時再跑完整的 test + val、損傷型態和時序。
 - **先看會跑什麼**：`--dry_run` 只印出每一步的指令，不執行。
-- **時間**：每個模型、每個 split，K = 8 時生成加去干擾物約 5–15 分鐘（refiner 較久），三種評估合計約 5–10 分鐘。
+- **時間**：新的 checkpoint 生成是主要的時間，每個模型、每個 split，K = 8 約 2–15 分鐘。指標本身，KID 在特徵已快取時是幾秒；損傷型態和時序各約半分鐘一個 split。完整一輪（兩個 split）大約 3 分鐘，不含生成。
 
-## 評估外部模型（不在這個 repo 的模型）
+### 外部模型（不在這個 repo 的模型）
 
 只要輸出圖檔就能評：每個 split 的每一幀生成一張（或 K 張），檔名用 GT 的檔名，再加入設定檔：
 
 ```json
-{"name": "my_model", "images": {"test": {"dir": "path/to/test_images", "suffix": ".png"}}}
+{"name": "my_model", "images": {"test": {"dir": "path/to/test_images", "suffix": ".png"}}, "clahe": true, "jpeg_quality": 75}
 ```
 
 - K 張的命名用 `"suffix": "_k{k}.png", "k": 8`。
-- 圖會轉成灰階並縮到 128×128。如果輸出不是 CLAHE 後的亮度範圍，加 `"clahe": true`。
-- 也可以自己轉：`python scripts/eval/images_to_npz.py --image_dir ... --suffix ... --out my.npz`。npz 格式見 `src/metrics/samples_io.py`。
+- 圖會轉成灰階並縮到 128×128。`"clahe": true` 用的是資料管線本身的 CLAHE（`dino_mmd.clahe_uint8`），不是 cv2 的。
+- 也可以自己轉：`python scripts/eval/images_to_npz.py --image_dir ... --suffix ... --clahe --out my.npz`；已經有 npz 時用 `--from_npz`。npz 格式見 `src/metrics/samples_io.py`。
 
-## 手動逐步執行（除錯用）
+### 手動逐步執行（除錯用）
 
 `run_eval_suite.py` 就是依序呼叫下面這些腳本，`--dry_run` 會印出它實際用的參數：
 
@@ -136,46 +118,44 @@ summarize_eval.py                            → summary.md
 ```
 
 - 時序 refiner（`use_refiner_residual`）不用另外處理，`generate_eval_samples.py` 會自動改成依時間整條推進。
-- 要比較時序模型時，加一組單幀模型的 `"shared_noise": true` 當對照（見 [temporal.md](temporal.md)）。
+- 要比較時序模型時，加一組單幀模型的 `"shared_noise": true` 當對照（見 [archive/temporal.md](archive/temporal.md)）。
 
 ## 版本
 
-目前的評估協定是 **eval-v1**（寫在每次執行的 `suite_config.json`）。參考集、骨幹模型、像素門檻、σ、patch 數任何一項改變就要升版；不同版本的數字不能直接比較。主 backbone 換成 DINOv2 時，真實感與條件指標要標成 eval-v1（dinov2-small），只和同樣用 DINOv2 的結果比；損傷型態和時序指標不用 backbone，不受影響。
+評估協定是 **eval-v1**（寫在每次執行的 `suite_config.json`），2026-10-28 起 DINOv3 指標加上 JPEG q75 對齊，2026-11-06 起外部模型要先轉到 CLAHE 影像域。參考集、backbone、像素門檻、σ、patch 數、影像域任何一項改變，數字就不能和舊的並列。
 
-2026-10-28 起，DINOv3 指標的主結果是 **eval-v1 + JPEG q75**：參考集和其他設定不變，只在抽特徵前把生成圖做一次 JPEG q75。`suite_config.json` 上仍寫 eval-v1，要看模型設定裡的 `jpeg_quality`（`dinov3_kid.json` 也會記）。對齊前後的 KID、鄰居對比、演進 ratio 不能並列；損傷型態和時序指標不受影響。
+## 封存的文件
 
-## 文件
+`archive/` 保留指標的設計過程，數字以 [results.md](results.md) 為準。其中的 cGAN 數字是在沒有 CLAHE 的影像域算的，已不成立。
 
 | 文件 | 內容 |
 |---|---|
-| [protocol.md](protocol.md) | 共同的評估設定：資料切分、參考集（含 JPEG 對齊）、前處理、npz 格式、不確定度、打亂檢查、可比性規則 |
-| [interference.md](interference.md) | 干擾物偵測器與生成圖的補圖 |
-| [distribution.md](distribution.md) | DINOv3 KID 系列、偽影、背圖檢查；試過但不採用的設計 |
-| [condition.md](condition.md) | 條件指標：線性 probe、GT 鄰居對比、損傷演進 |
-| [damage_texture.md](damage_texture.md) | 損傷型態的像素統計：灰霧、白塊、裂縫與訓練柱的重疊 |
-| [temporal.md](temporal.md) | 時序一致性：閃爍、色調跳動、損傷與裂縫的保留；共用雜訊對照 |
-| [oracle.md](oracle.md) | Oracle 版本（GT 的 DINOv3 特徵當條件）：目的、對照組、循環偏差、怎麼讀 |
-| [condition_g.md](condition_g.md) | 遲滯迴圈條件與 GRU 隱狀態 g：影像柱在資料集的位置、g 的組成、生成器眼中的 CTR1 / R307、Δg、條件端建議 |
-| [results.md](results.md) | 目前的結果（JPEG 對齊後）：base、refiner、V106C、v11appr、cGAN；後半保留對齊前的舊結果（gn、base0920、V9、oracle 等） |
-| [references.md](references.md) | 參考文獻，依指標分類 |
-| [research_log.md](research_log.md) | 原始研究筆記，記錄了每一步怎麼走到現在的設計。**裡面較早的數字有些已被更正**，以 results.md 為準 |
+| [protocol.md](archive/protocol.md) | 共同設定的完整版：JPEG 對齊的發現過程、npz 格式、打亂檢查、可比性規則 |
+| [distribution.md](archive/distribution.md) | KID 系列的估計量、backbone 選擇、試過但不採用的設計 |
+| [condition.md](archive/condition.md) | 線性 probe、GT 鄰居對比、損傷演進的完整說明 |
+| [damage_texture.md](archive/damage_texture.md) | 像素分類、裂縫、綜合偏差的完整說明 |
+| [temporal.md](archive/temporal.md) | 時序指標與共用雜訊對照 |
+| [interference.md](archive/interference.md) | 干擾物偵測器與生成圖的補圖 |
+| [oracle.md](archive/oracle.md) | Oracle 版本（GT 的 DINOv3 特徵當條件）與循環偏差 |
+| [condition_g.md](archive/condition_g.md) | 遲滯迴圈條件與 GRU 隱狀態 g 的分析 |
+| [results.md](archive/results.md) | 2026-10-29 的結果，含 JPEG 對齊前後、gn、base0920、V9、oracle |
+| [references.md](archive/references.md) | 參考文獻，依指標分類 |
+| [research_log.md](archive/research_log.md) | 原始研究筆記；較早的數字有些已被更正 |
 
 ## 程式
 
 | 檔案 | 作用 |
 |---|---|
-| `src/metrics/dino_mmd.py` | DINOv3 特徵、分組 U-statistic、jackknife、鄰居對比、演進曲線 |
+| `src/metrics/dino_mmd.py` | DINOv3 特徵、分組 U-statistic、jackknife、鄰居對比、演進曲線、`clahe_uint8` |
 | `src/metrics/interference.py` | 干擾物分割器 |
 | `src/metrics/damage_texture.py` | 像素分類、裂縫圖、容忍度 F1 |
+| `src/metrics/temporal.py`、`scripts/eval/eval_temporal.py` | 時序指標 |
 | `scripts/eval/generate_eval_samples.py` | 生成評估樣本 npz |
 | `scripts/eval/inpaint_generated_samples.py` | 偵測並補掉生成圖的干擾物 |
-| `scripts/eval/train_interference_detector.py` | 訓練干擾物偵測器 |
-| `scripts/eval/eval_dinov3_kid.py` | DINOv3 指標主腳本 |
-| `scripts/eval/eval_damage_texture.py` | 損傷型態指標 |
-| `src/metrics/temporal.py`、`scripts/eval/eval_temporal.py` | 時序一致性指標 |
-| `scripts/eval/dinov3_kid_sanity.py` | 指標本身的失真單調性檢查 |
-| `scripts/eval/run_eval_suite.py`、`job/evaluation/eval_suite.sh` | 一條指令跑完整套評估 |
-| `scripts/eval/summarize_eval.py` | 三種評估結果 → 一份 `summary.md` |
+| `scripts/eval/eval_dinov3_kid.py` | KID、鄰居對比、演進 |
+| `scripts/eval/eval_damage_texture.py` | 損傷面積與綜合偏差 |
+| `scripts/eval/eval_diversity.py` | 抄襲率、spread/skill、同條件內 1 − mask IoU |
+| `scripts/eval/run_eval_suite.py`、`scripts/eval/summarize_eval.py` | 一條指令跑完 suite；結果 → `summary.md` |
 | `scripts/eval/images_to_npz.py`、`src/metrics/samples_io.py` | 外部模型的圖檔 → 評估用 npz；npz 格式 |
 | `scripts/eval/pack_eval_assets.sh` | 打包不在 git 裡的參考集與偵測器 |
 | `scripts/viz/export_drift_view_panel_from_images.py` | 把任何模型的圖排成 drift × DI 的雙面 panel，供目視比較 |

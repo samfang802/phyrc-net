@@ -121,7 +121,7 @@ if [[ -n "${RS_LOSS_SCALE}" ]]; then
     EXTRA_ARGS+=(--rs_loss_scale "${RS_LOSS_SCALE}")
 fi
 
-"${NICE_CMD[@]}" python3 -u train_resnet18_siamese.py \
+"${NICE_CMD[@]}" python3 -u -m quantification.train_resnet18_siamese \
   --lr "${LR}" \
   --epoch "${EPOCH}" \
   --batch_size "${BATCH_SIZE}" \

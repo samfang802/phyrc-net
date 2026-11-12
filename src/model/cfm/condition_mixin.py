@@ -192,6 +192,7 @@ class CFMConditionMixin:
                 "direction_prev": batch.get("direction_prev"),
                 "DI_prev": batch.get("DI_prev"),
                 "mask_combined": batch.get("mask_combined", condition_mask),
+                "mask_hop": batch.get("mask_hop"),  # [object | frame t-1 layout] (layout_cond only)
                 "has_prev": batch.get("has_prev"),
                 "image_prev2": batch.get("image_prev2"),
                 "hidden_state_prev2": batch.get("hidden_state_prev2"),
@@ -200,6 +201,15 @@ class CFMConditionMixin:
                 "has_prev2": batch.get("has_prev2"),
                 "state_prev": batch.get("state_prev"),
                 "state_prev2": batch.get("state_prev2"),
+                "image_next": batch.get("image_next"),
+                "hidden_state_next": batch.get("hidden_state_next"),
+                "has_next": batch.get("has_next"),
+                "memory_prev": batch.get("memory_prev"),
+                "memory_prev2": batch.get("memory_prev2"),
+                "memory_rows": batch.get("memory_rows"),
+                "memory_rows_prev2": batch.get("memory_rows_prev2"),
+                "memory_row": batch.get("memory_row"),
+                "flipped": batch.get("flipped"),
             }
             return (
                 real_data,

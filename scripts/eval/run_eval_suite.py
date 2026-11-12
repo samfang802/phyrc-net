@@ -26,9 +26,12 @@ A model is one of
   - a folder of saved images per split ("images"): images_to_npz.py;
   - a ready npz per split ("npz"), in the src/metrics/samples_io.py layout.
 A model with no source for a split (e.g. no val images) is left out of that split.
+"clahe": true brings a model that draws raw photos into the reference domain (inpaint → CLAHE → JPEG):
+the generator's CLAHE is applied to its samples before everything else (images_to_npz.py). The cGAN
+was trained on the raw photos and needs it; the CFM runs of this repo draw CLAHE'd images and must not.
 "jpeg_quality": Q round-trips that model's samples through PIL JPEG quality Q before the DINO features.
-The reference set (and the archived cGAN images) are JPEG q75, so set 75 on every model whose images
-were never JPEG'd, i.e. all models of this repo; never on JPEG inputs. Texture / temporal are unaffected.
+The reference set is JPEG q75 saved after CLAHE, so set 75 on every model of this repo and on a model
+with "clahe" (its CLAHE output has not been JPEG'd). Texture / temporal are unaffected.
 
 Backbone: "dino_model" (default DINOv3 ViT-S/16, gated on Hugging Face: accept its licence and
 `huggingface-cli login`) feeds the realism / condition metrics and the white-vs-DINO test. Set it to
@@ -42,8 +45,11 @@ Per split, under <out_dir>/<split>/:
   samples/<name>_eq.npz      … plus the GT-mask placebo      → DINOv3 metrics
   kid/ texture/ temporal/    the three evaluations (kid/ = DINOv3; another backbone → kid_<name>/)
   summary.md                 the report (scripts/eval/summarize_eval.py)
-and <out_dir>/summary.md links the splits. Every step is skipped when its output exists, so an
-interrupted run continues where it stopped; --force redoes everything. Logs: <out_dir>/logs/.
+and <out_dir>/summary.md links the splits. A step is skipped when its output exists and was produced
+for the same command; a changed model list reruns that step. --force redoes everything. --quick scores
+the test split with KID only (samples are still generated), which is the screening run; leave it off
+for the table in docs/eval/results.md. DINOv3 features go to results/eval_suite/feature_cache, shared
+by every suite, so a baseline scored once is not embedded again. Logs: <out_dir>/logs/.
 GPU: whatever CUDA_VISIBLE_DEVICES is set to. Protocol and the meaning of each number: docs/eval/.
 
 Examples:
@@ -55,6 +61,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shlex
@@ -89,6 +96,8 @@ def _parse_args():
     p.add_argument("--config", required=True)
     p.add_argument("--splits", nargs="*", default=None, help="Override the config's splits")
     p.add_argument("--only", nargs="*", default=None, choices=STEPS, help="Run only these steps")
+    p.add_argument("--quick", action="store_true",
+                   help="Screening run: test split, KID and summary only. Samples are still generated.")
     p.add_argument("--force", action="store_true", help="Redo steps whose output already exists")
     p.add_argument("--dry_run", action="store_true", help="Print the commands without running them")
     return p.parse_args()
@@ -104,11 +113,25 @@ class Runner:
     def want(self, step):
         return self.cli.only is None or step in self.cli.only
 
-    def run(self, name, args, outputs):
-        """Run `python args` unless every path in outputs exists (or --force)."""
-        if not self.cli.force and outputs and all(os.path.exists(o) for o in outputs):
+    def run(self, name, args, outputs, trust_existing=False):
+        """Run `python args` unless its outputs exist for this exact command (--force overrides).
+
+        trust_existing: a sample file is the result, so an existing one is kept even if this
+        command was never stamped. Metric jsons are not: a missing stamp means they are redone
+        once, and a changed model list (a different command) redoes them.
+        """
+        stamp_path = os.path.join(self.log_dir, f"{name}.stamp")
+        stamp = hashlib.sha256("\n".join(str(a) for a in args).encode()).hexdigest()
+        done = outputs and all(os.path.exists(o) for o in outputs)
+        prev = open(stamp_path).read().strip() if os.path.isfile(stamp_path) else None
+        if not self.cli.force and done and (prev == stamp or (prev is None and trust_existing)):
+            if prev is None and not self.cli.dry_run:
+                with open(stamp_path, "w") as f:
+                    f.write(stamp + "\n")
             print(f"[suite] skip {name} (done)", flush=True)
             return
+        if done and prev not in (None, stamp) and not self.cli.force:
+            print(f"[suite] redo {name} (inputs changed)", flush=True)
         cmd = [self.py, "-u"] + [str(a) for a in args]
         print(f"[suite] {name}\n        {shlex.join(cmd)}", flush=True)
         if self.cli.dry_run:
@@ -121,6 +144,8 @@ class Runner:
             with open(log) as f:
                 tail = "".join(f.readlines()[-15:])
             raise SystemExit(f"[suite] {name} failed (exit {ret.returncode}); log {log}:\n{tail}")
+        with open(stamp_path, "w") as f:
+            f.write(stamp + "\n")
         print(f"        done in {time.time() - t0:.0f} s", flush=True)
 
 
@@ -182,18 +207,22 @@ def _sample_step(r, cfg, m, split, raw):
             args += ["--app_code", m["app_code"]]
         if m.get("set"):
             args += ["--set", *m["set"]]
-        r.run(f"{split}_samples_{m['name']}", args, [raw])
+        r.run(f"{split}_samples_{m['name']}", args, [raw], trust_existing=True)
         return raw
     if "images" in m and split in m["images"]:
         src = m["images"][split]
         args = ["scripts/eval/images_to_npz.py", "--image_dir", src["dir"], "--suffix", src.get("suffix", ".png"),
                 "--k", src.get("k", 1), "--split", split, "--data_path", cfg["data_path"], "--out", raw]
-        if src.get("clahe"):
+        if m.get("clahe") or src.get("clahe"):
             args.append("--clahe")
-        r.run(f"{split}_images_{m['name']}", args, [raw])
+        r.run(f"{split}_images_{m['name']}", args, [raw], trust_existing=True)
         return raw
     if "npz" in m and split in m["npz"]:
-        return m["npz"][split]
+        if not m.get("clahe"):
+            return m["npz"][split]
+        r.run(f"{split}_clahe_{m['name']}", ["scripts/eval/images_to_npz.py", "--from_npz", m["npz"][split], "--clahe",
+                                             "--out", raw], [raw], trust_existing=True)
+        return raw
     return None
 
 
@@ -201,8 +230,12 @@ def main():
     cli = _parse_args()
     with open(cli.config) as f:
         cfg = {**DEFAULTS, **json.load(f)}
+    if cli.quick and cli.only is None:
+        cli.only = ["samples", "kid", "summary"]
     if cli.splits:
         cfg["splits"] = cli.splits
+    elif cli.quick:
+        cfg["splits"] = ["test"]
     names = [m["name"] for m in cfg["models"]]
     if len(set(names)) != len(names):
         raise SystemExit("model names must be unique")
@@ -228,8 +261,8 @@ def main():
             if cfg["remove_interference"] and r.want("clean"):
                 base = ["scripts/eval/inpaint_generated_samples.py", "--samples", src, "--detector", cfg["detector"],
                         "--split", split]
-                r.run(f"{split}_clean_{m['name']}", base + ["--out", clean], [clean])
-                r.run(f"{split}_eq_{m['name']}", base + ["--add_gt_mask", "--out", eq], [eq])
+                r.run(f"{split}_clean_{m['name']}", base + ["--out", clean], [clean], trust_existing=True)
+                r.run(f"{split}_eq_{m['name']}", base + ["--add_gt_mask", "--out", eq], [eq], trust_existing=True)
             if not cfg["remove_interference"]:
                 clean = eq = src
             samples[m["name"]] = (clean, eq)
@@ -251,7 +284,9 @@ def main():
                                                         "--dino_model", b, *jpeg, "--other_split", other if split == "test" else "",
                                                         "--out_dir", d], [os.path.join(d, "dinov3_kid.json")])
         if r.want("texture"):
-            dino = ["--dino", "--dino_model_id", cfg["dino_model"]] if max(int(m.get("k", cfg["k"])) for m in cfg["models"]) > 1 else []
+            # white-vs-DINO is not in the reported table; it loads the backbone a second time. Opt in with texture_dino.
+            dino = (["--dino", "--dino_model_id", cfg["dino_model"]]
+                    if cfg.get("texture_dino") and max(int(m.get("k", cfg["k"])) for m in cfg["models"]) > 1 else [])
             r.run(f"{split}_texture", ["scripts/eval/eval_damage_texture.py", "--samples", *clean_list, *common,
                                        "--other_split", other, *dino, "--out_dir", tex_dir],
                   [os.path.join(tex_dir, "damage_texture.json")])

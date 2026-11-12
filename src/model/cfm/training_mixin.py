@@ -51,6 +51,8 @@ class CFMTrainingMixin:
 
 
     def training_step(self, batch, batch_idx):
+        if isinstance(batch, dict) and "win_image" in batch:
+            return self._window_training_step(batch)
         if getattr(self, "opa_enabled", False):
             self._opa_meta = (batch["filename"], batch["flipped"]) if isinstance(batch, dict) and "filename" in batch else None
         (
@@ -203,6 +205,26 @@ class CFMTrainingMixin:
                     on_step=True,
                     on_epoch=False,
                 )
+                if getattr(self, "refiner_state_source", "base") == "resample":
+                    for key, attr in (("resample_t", "_last_refiner_resample_t"),
+                                      ("resample_frac", "_last_refiner_resample_frac")):
+                        self.log(f"train/{key}", float(getattr(self, attr, 0.0)), prog_bar=False, on_step=True,
+                                 on_epoch=False)
+                if getattr(self, "refiner_memory_encoder", False):
+                    logs = {"memory_field_mean": getattr(self, "_last_memory_field_mean", 0.0)}
+                    if float(getattr(self, "refiner_memory_aux_weight", 0.0)) > 0.0:
+                        logs["memory_aux_loss"] = getattr(self, "_last_memory_aux_loss", 0.0)
+                        for k, v in (getattr(self, "_last_memory_aux_parts", None) or {}).items():
+                            logs[f"memory_aux_{k}"] = v
+                    if float(getattr(self, "refiner_memory_sparse_weight", 0.0)) > 0.0:
+                        logs["memory_sparse"] = getattr(self, "_last_memory_sparse", 0.0)
+                    for k, v in logs.items():
+                        self.log(f"train/{k}", float(v), prog_bar=False, on_step=True, on_epoch=False)
+                if getattr(self, "refiner_memory_recycle", False):
+                    for key, attr in (("memory_recycle_frac", "_last_memory_recycle_frac"),
+                                      ("memory_bank_fill", "_last_memory_bank_fill")):
+                        self.log(f"train/{key}", float(getattr(self, attr, 0.0)), prog_bar=False, on_step=True,
+                                 on_epoch=False)
                 if float(self.refiner_tone_loss_weight) > 0.0:
                     self.log(
                         "train/refiner_tone_loss",
@@ -251,6 +273,33 @@ class CFMTrainingMixin:
         )
         return loss
 
+
+    def _window_training_step(self, batch):
+        """rfmv2 window batch (docs/RFMV2_ARCHITECTURE.md)."""
+        loss = self.refiner_window_loss(batch)
+        trainer = getattr(self, "_trainer", None)
+        if trainer is not None and trainer.optimizers:
+            self.log("train/lr", float(trainer.optimizers[0].param_groups[0]["lr"]), on_step=True, on_epoch=False)
+        bs = int(batch["win_image"].shape[0]) * int(self.refiner_window)
+        self.log("train/loss", loss, prog_bar=True, on_step=True, on_epoch=False, batch_size=bs)
+        logs = {"fm_loss": loss, "refiner_fm_loss": getattr(self, "_last_fm_loss", 0.0),
+                "resample_t": getattr(self, "_last_refiner_resample_t", 0.0),
+                "resample_frac": getattr(self, "_last_refiner_resample_frac", 0.0),
+                "window_hops": getattr(self, "_last_window_hops", 0.0),
+                "false_mem_frac": getattr(self, "_last_false_mem_frac", 0.0),
+                "erase_frac": getattr(self, "_last_erase_frac", 0.0),
+                "erase_px": getattr(self, "_last_erase_px", 0.0),
+                "bank_paste_frac": getattr(self, "_last_bank_paste_frac", 0.0),
+                "bank_paste_px": getattr(self, "_last_bank_paste_px", 0.0),
+                "bank_err_frac": getattr(self, "_last_bank_err_frac", 0.0),
+                "peak_mem_gb": (torch.cuda.max_memory_allocated() / 1e9) if torch.cuda.is_available() else 0.0,
+                "patch_size": float(getattr(self, "_last_patch_size", self.model_spatial_size))}
+        if float(self.refiner_tone_loss_weight) > 0.0:
+            logs["refiner_tone_loss"] = getattr(self, "_last_refiner_tone_loss", 0.0)
+            logs["refiner_topo_loss"] = getattr(self, "_last_refiner_topo_loss", 0.0)
+        for k, v in logs.items():
+            self.log(f"train/{k}", float(v), prog_bar=False, on_step=True, on_epoch=False, batch_size=bs)
+        return loss
 
     def _flow_matching_loss_for_batch(
         self, target_space_data, c, gru_feat, valid_mask, condition_mask, ar_pack, info=None
@@ -509,6 +558,9 @@ class CFMTrainingMixin:
             control = [p for n, p in named if n.startswith("control.")]
             trunk = [p for n, p in named if not n.startswith("control.")]
             param_groups.append({"params": control})
+            if getattr(self, "memory_encoder", None) is not None:
+                param_groups.append({"params": list(self.memory_encoder.parameters()),
+                                     "lr": self.lr * float(getattr(self, "refiner_memory_lr_mult", 1.0))})
             if trunk:
                 param_groups.append({"params": trunk, "lr": self.lr * float(self.trunk_lr_mult)})
             print(
@@ -574,4 +626,13 @@ class CFMTrainingMixin:
             logger=True,
         )
         if self.grad_clip_max_norm > 0:
-            torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=self.grad_clip_max_norm)
+            enc = getattr(self, "memory_encoder", None)
+            if enc is not None and getattr(enc, "decoder", None) is not None:
+                # The decoder loss drives E / D far harder than the flow loss: clip them on their own so they do
+                # not shrink the refiner's gradient under one global norm.
+                own = {id(p) for p in enc.parameters()}
+                torch.nn.utils.clip_grad_norm_([p for p in self.parameters() if id(p) not in own],
+                                               max_norm=self.grad_clip_max_norm)
+                torch.nn.utils.clip_grad_norm_(list(enc.parameters()), max_norm=self.grad_clip_max_norm)
+            else:
+                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=self.grad_clip_max_norm)

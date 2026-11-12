@@ -128,6 +128,19 @@ def _load_velocity_init_with_control(model, ckpt_path):
     state = payload.get("state_dict", payload)
     prefix = "velocity_net."
     sub = {key[len(prefix):]: value for key, value in state.items() if key.startswith(prefix)}
+    if any(k.startswith("control.") for k in sub):
+        # A trained refiner: continue from it as is (control branch, gates and out_conv included).
+        # Extra hint channels (refiner memory) enter the branch's in_conv with zero weights.
+        own = model.velocity_net.state_dict()
+        for k in ("control.in_conv.weight", "control.hint_block.0.weight"):
+            if k in sub and k in own and sub[k].shape[1] < own[k].shape[1] and sub[k].shape[2:] == own[k].shape[2:]:
+                w = torch.zeros_like(own[k])
+                w[:, : sub[k].shape[1]] = sub[k]
+                print(f"[train_mixed] {k}: {sub[k].shape[1]} -> {w.shape[1]} hint channels (new ones zero)", flush=True)
+                sub[k] = w
+        model.velocity_net.load_state_dict(sub, strict=True)
+        print(f"[train_mixed] Loaded a trained refiner from {ckpt_path} tensors={len(sub)} (control kept)", flush=True)
+        return
     missing, unexpected = model.velocity_net.load_state_dict(sub, strict=False)
     stray = [k for k in missing if not k.startswith("control.")]
     if stray or unexpected:
@@ -138,12 +151,18 @@ def _load_velocity_init_with_control(model, ckpt_path):
     else:
         net.control.copy_from_trunk(net)
         branch = "control branch copied from its encoder+mid"
-    if model.refiner_target_x1:
+    if model.refiner_target_x1 and not model.freeze_trunk:
         # v10.6: drop gn's single-frame output, as F does.
         with torch.no_grad():
             net.out_conv.weight.zero_()
             net.out_conv.bias.zero_()
         branch += "; out_conv zeroed"
+    elif model.refiner_target_x1:
+        # Frozen trunk: out_conv is frozen too, so a zeroed one would pin the velocity to 0 forever (no gradient
+        # reaches the control branch or the memory encoder). Keep gn's output; the control branch adds to it.
+        branch += "; out_conv kept (frozen trunk)"
+    if model.freeze_trunk and not net.out_conv.weight.requires_grad and float(net.out_conv.weight.abs().sum()) == 0.0:
+        raise RuntimeError("freeze_trunk with a zero, frozen out_conv: the velocity would stay 0")
     print(
         f"[train_mixed] Loaded trunk from {ckpt_path} tensors={len(sub)}; {branch} "
         f"(inject={'encoder' if model.control_inject_encoder else 'decoder'}, freeze_trunk={model.freeze_trunk})",
@@ -175,6 +194,27 @@ class PeriodicKID(pl.Callback):
             trainer.logger.log_metrics({f"val/{k}": v for k, v in stats.items()}, step=step)
 
 
+class RolloutBankCallback(pl.Callback):
+    """rfmv2b: build the rollout bank (src/model/cfm/rollout_bank.py) at step ``start`` and every ``every`` steps
+    after it with the current weights, from the unaugmented train split ``dataset``."""
+
+    def __init__(self, dataset, start, every, seed=0):
+        super().__init__()
+        self.dataset, self.start, self.every, self.seed = dataset, int(start), max(1, int(every)), int(seed)
+        self._last_step = -1
+
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        step = int(trainer.global_step)
+        if step < self.start or (step - self.start) % self.every != 0 or step == self._last_step:
+            return
+        self._last_step = step
+        stats = pl_module._rollout_bank.build(pl_module, self.dataset, step, self.seed + step,
+                                              log_dir=pl_module.result_dir)
+        if trainer.logger is not None:
+            trainer.logger.log_metrics({f"bank/{k}": v for k, v in stats.items() if isinstance(v, (int, float))},
+                                       step=step)
+
+
 def _load_spall_g_init(model, args):
     velocity_init = str(getattr(args, "velocity_init", "") or "").strip()
     mask_ckpt = str(getattr(args, "spall_mask_ckpt", "") or "").strip()
@@ -195,6 +235,19 @@ def _load_spall_g_init(model, args):
                 f"|w|={float(w[:, col].abs().sum()):.3g} (0 = zero-init)",
                 flush=True,
             )
+    if velocity_init and bool(getattr(model, "layout_cond", False)) and not bool(getattr(args, "layout_zero_init", True)):
+        # The warm-start loader inserts the missing layout column as zeros. --layout_zero_init False asks for a
+        # live column (phase0_layout_oracle.md: a zero-init column trained 5k steps was read only weakly), so
+        # redraw it with the spread of the trained columns.
+        w = model.velocity_net.in_conv.weight
+        col = w.shape[1] - 1 - (1 if model.use_damage_mask_condition else 0)
+        if float(w[:, col].abs().sum()) == 0.0:
+            with torch.no_grad():
+                others = torch.cat([w[:, :col], w[:, col + 1:]], dim=1)
+                w[:, col].normal_(0.0, float(others.std()))
+            print(f"[train_mixed] layout_cond: inserted layout column {col} redrawn, std {float(others.std()):.3g}", flush=True)
+        else:
+            print(f"[train_mixed] layout_cond: layout column {col} came trained with the warm start; kept", flush=True)
     if mask_ckpt:
         if getattr(model, "spall_mask_head", None) is None:
             raise ValueError("spall_mask_ckpt requires use_spall_growth_mask")
@@ -541,8 +594,9 @@ if __name__ == "__main__":
     
     
     
-    # set dataset argument
-    set_dataset_args(args, train_dataloader)
+    # set dataset argument. A throwaway loader: iterating train_dataloader here would fork its persistent workers
+    # before the state / memory caches below are attached, and they would never see them.
+    set_dataset_args(args, DataLoader(train_ds, batch_size=2, shuffle=False, num_workers=0))
     # save_args
     save_args(args)
 
@@ -560,6 +614,63 @@ if __name__ == "__main__":
         train_ds.attach_state_cache(
             load_or_build_state_cache(model, train_ds, int(args.refiner_state_cache_n), device)
         )
+    if bool(getattr(args, "refiner_memory", False)):
+        from src.model.cfm.refiner_memory import build_memory_cache, build_memory_frames, build_memory_rows
+
+        gate = str(getattr(args, "refiner_memory_gate", "none"))
+        if bool(getattr(args, "refiner_memory_encoder", False)):
+            tables = []
+            for ds in (train_ds, val_ds):
+                frames, rows_of = build_memory_frames(ds, val_transform, sum(len(t) for t in tables), gate,
+                                                      str(getattr(args, "refiner_memory_input", "raw")))
+                ds.attach_memory_rows(rows_of)
+                tables.append(frames)
+            model.attach_memory_frames(torch.cat(tables))
+        else:
+            offset = 0
+            for ds in (train_ds, val_ds):
+                ds.attach_memory_cache(build_memory_cache(
+                    ds, val_transform, float(args.refiner_memory_sigma), float(args.refiner_memory_tau),
+                    int(args.refiner_memory_window), gate, int(getattr(args, "refiner_memory_ttl", 0)),
+                    float(getattr(args, "refiner_memory_novelty", 0.0))))
+                if bool(getattr(args, "refiner_memory_recycle", False)):
+                    ds.attach_memory_rows(*build_memory_rows(ds, offset, gate))
+                offset += len(ds.label)
+            if bool(getattr(args, "refiner_memory_recycle", False)):
+                model.attach_memory_error_bank(offset)
+    if int(getattr(args, "refiner_window", 0)) > 0:
+        # rfmv2 (docs/RFMV2_ARCHITECTURE.md): the train split becomes windows of L consecutive targets; a batch
+        # holds batch_size / L windows so it still has batch_size targets. Val stays per frame (val loss, KID).
+        L = int(args.refiner_window)
+        train_ds.enable_window(L, int(args.refiner_memory_window) - 1)
+        train_dataloader = DataLoader(
+            train_ds,
+            batch_size=max(1, train_batch_size // L),
+            shuffle=True,
+            num_workers=num_workers,
+            drop_last=True,
+            persistent_workers=num_workers > 0,
+            **({"prefetch_factor": 4} if num_workers > 0 else {}),
+            **loader_extra,
+        )
+        print(f"[train_mixed] rfmv2 windows: L={L}, {max(1, train_batch_size // L)} windows per batch", flush=True)
+        if str(getattr(args, "refiner_erase_source", "gray")) == "bank":
+            from src.model.cfm.rollout_bank import RolloutBank
+
+            print("[train_mixed] rfmv2b: building the unaugmented train dataset for the rollout bank...", flush=True)
+            bank_kwargs = dict(dataset_kwargs)
+            bank_kwargs["layout_drop_prob"] = 0.0
+            bank_ds = PatternLoopDataset(root="./Data", mode="train", transform=val_transform, extractor=extractor,
+                                         extractor_args=extractor_args, **bank_kwargs)
+            if list(bank_ds.label.iloc[:, 0]) != list(train_ds.label.iloc[:, 0]):
+                raise ValueError("rollout bank dataset rows differ from the train dataset rows")
+            model._rollout_bank = RolloutBank(len(bank_ds.label), int(args.refiner_bank_chain),
+                                              int(args.refiner_bank_stride), int(args.refiner_bank_keep))
+            callback_list.append(RolloutBankCallback(bank_ds, args.refiner_bank_start, args.refiner_bank_every))
+            print(f"[train_mixed] rfmv2b: rollout bank from step {args.refiner_bank_start} every "
+                  f"{args.refiner_bank_every}, chain {args.refiner_bank_chain} stride {args.refiner_bank_stride}, "
+                  f"keep {args.refiner_bank_keep}; paste prob {args.refiner_erase_prob}, "
+                  f"memory error prob {args.refiner_bank_mem_err_prob}", flush=True)
     if int(getattr(args, "kid_every_n_steps", 0)) > 0:
         callback_list.append(
             PeriodicKID(val_ds, args.kid_every_n_steps, args.kid_k, args.kid_image_dir)
@@ -587,8 +698,9 @@ if __name__ == "__main__":
         logger = logger,
         log_every_n_steps=2,
         check_val_every_n_epoch=None,
-        val_check_interval=args.val_check_interval,
-        max_steps=args.max_steps,
+        val_check_interval=args.val_check_interval * max(1, int(getattr(args, "accumulate_grad_batches", 1))),
+        accumulate_grad_batches=max(1, int(getattr(args, "accumulate_grad_batches", 1))),
+        max_steps=int(args.stop_step) if int(getattr(args, "stop_step", 0)) > 0 else args.max_steps,
         max_epochs=-1,
         num_sanity_val_steps=min(2, len(val_dataloader)),
         callbacks = callback_list

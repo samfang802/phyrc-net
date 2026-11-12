@@ -90,7 +90,8 @@ def main():
 
     if cli.npz:
         z = np.load(cli.npz, allow_pickle=False)
-        lookup = {str(n): z["fake"][i, cli.k] for i, n in enumerate(z["filename"])}
+        fake = z["fake"]  # NpzFile re-decompresses on every z["fake"]; read once
+        lookup = {str(n): fake[i, cli.k] for i, n in enumerate(z["filename"])}
         get = lambda n: lookup[n]
     elif cli.gt:
         get = lambda n: load_real_uint8([n], cli.gt_image_dir, use_clahe=not cli.gt_no_clahe)[0]

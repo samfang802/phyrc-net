@@ -9,9 +9,9 @@ Reads (any of them may be missing; its columns are then left out):
 
 Writes one table per metric family, the reference rows next to them, and every model's paired
 difference against --baseline with its z. Models whose condition is the DINOv3 feature
-(oracle_dino) get their DINOv3-based numbers in brackets: those are circular (docs/eval/oracle.md);
+(oracle_dino) get their DINOv3-based numbers in brackets: those are circular (docs/eval/archive/oracle.md);
 with another backbone they are shown plainly.
-How to read every column: docs/eval/README.md.
+How to read every column: docs/eval/metrics.md.
 
 Example:
   python scripts/eval/summarize_eval.py --kid_dir out/test/kid --texture_dir out/test/texture \
@@ -131,10 +131,10 @@ def main():
     base = cli.baseline or names[0]
     md = [f"# 評估摘要{'：' + cli.title if cli.title else ''}", ""]
     md.append(f"配對比較的基準模型：**{base}**。箭頭：↓ 越低越好，↑ 越高越好，→1 / →GT 越接近越好。"
-              "各欄定義見 `docs/eval/README.md`。")
+              "各欄定義見 `docs/eval/metrics.md`。")
     circular = {n for n in names if kid and kid["models"].get(n, {}).get("circular_eval_warning")}
     if circular:
-        md.append(f"\n**循環評估**（條件就是 DINOv3 特徵，括號內的數字不能拿來比，見 `docs/eval/oracle.md`）：{', '.join(sorted(circular))}。")
+        md.append(f"\n**循環評估**（條件就是 DINOv3 特徵，括號內的數字不能拿來比，見 `docs/eval/archive/oracle.md`）：{', '.join(sorted(circular))}。")
 
     if kid:
         md += ["", f"## 真實感與條件一致性（{_backbone(kid)}）", ""]

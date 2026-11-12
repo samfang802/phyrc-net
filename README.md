@@ -1,195 +1,80 @@
-# Physics-Guided Damage Prediction and Generation for RC Bridge Columns
+# Physics-Guided Damage Image Generation for RC Bridge Columns
 
-This repository trains a **frozen hysteresis GRU** and a **conditional flow-matching (CFM)** generator that synthesizes RC-column damage images from structural signals.
+Generates image sequences of damage on reinforced-concrete (RC) bridge columns under cyclic loading. The input is the loading history (hysteresis loop and drift); the output is one damage image per loading peak.
 
-The default generator is **V9 / selfcondnoDI**: pixel-space ADM U-Net, split gated AdaGN, zeroed DI, classic self-conditioning, VSS at L3/U3, and Patch Diffusion. See [docs/ARCHITECTURE_UPDATE_V9.md](docs/ARCHITECTURE_UPDATE_V9.md).
+Built with PyTorch and PyTorch Lightning. Most design notes in [`docs/`](docs/README.md) are written in Traditional Chinese.
 
-Built with PyTorch and PyTorch Lightning.
+## Pipeline
 
-## Project Layout
+| Stage | What it does | Entry point | Notes |
+|---|---|---|---|
+| 1. Damage state | Encodes the hysteresis history into a per-frame damage state (`z` + damage scalars + loading sign) | `train_damage_encoder.py` (older GRU: `train_hysteresis.py`) | [DAMAGE_STATE_ENCODER.md](docs/DAMAGE_STATE_ENCODER.md) |
+| 2. Single-frame generator | Pixel-space ADM U-Net trained with conditional flow matching; V12 adds a spalling-layout input channel | `train_mixed.py` via `job/DamagePatternGeneration/train_ADMCFM_v12.sh` | [V11](docs/ARCHITECTURE_UPDATE_V11.md), [V12](docs/ARCHITECTURE_UPDATE_V12.md) |
+| 3. Temporal refiner | Redraws frame *t* from the previous frame *S<sub>t−1</sub>* so damage accumulates over the sequence; rfmv2 adds autoregressive resampling and rule-based memory | `train_mixed.py` via `job/DamagePatternGeneration/train_ADMCFM_v12refiner.sh` | [RFMV2_ARCHITECTURE.md](docs/RFMV2_ARCHITECTURE.md) |
+| 4. Evaluation | Generates samples, removes test-rig interference, then scores realism, condition consistency, damage texture, copying and temporal behaviour | `job/evaluation/eval_suite.sh` | [docs/eval/](docs/eval/README.md) |
+
+Earlier versions (V9–V10.6) are described in `docs/ARCHITECTURE_UPDATE_V*.md`. The latest results for all versions are in [docs/eval/results.md](docs/eval/results.md).
+
+A separate DI (damage index) regressor, used only for evaluation, lives in [`quantification/`](quantification/).
+
+## Repository layout
 
 ```text
-intership-project/
-|- argument/
-|  |- mixed.py                         # Stage-3 CFM flags
-|  |- argument_mixed.py                # re-export used by train_mixed.py
-|- job/DamagePatternGeneration/
-|  |- common.sh                        # conda, CUDA, nice
-|  |- train_ADMCFM.sh                  # V9 default job
-|- src/
-|  |- data/                            # dataset implementations
-|  |- dataset.py                       # import path kept for trainers
-|  |- model/
-|  |  |- adm.py                        # ADMUNetCFM
-|  |  |- vss.py
-|  |  |- cfm/                          # default CFM
-|  |  |- exp/                          # wavelet, Laplacian, FreCaS, MAFP, ...
-|  |  |- ImageGeneration.py
-|- scripts/
-|  |- eval/  viz/  export/
-|- train_mixed.py
-|- docs/                               # current notes; older ones in docs/archive/
+argument/                 command-line flags (mixed.py = generator / refiner)
+src/
+  data/                   datasets, damage-state conditioning, layout I/O
+  model/                  ADM U-Net, CFM mixins (model/cfm/), damage-state encoder, regressors
+  metrics/                KID / DINO / damage-texture metrics
+scripts/
+  eval/                   evaluation suite and diagnostic probes
+  viz/  export/  data/    figures, dataset export, caches
+quantification/           DI regressors (run as python -m quantification.<script>)
+job/                      PBS job scripts, see job/README.md
+docs/                     architecture and experiment notes
+train_mixed.py            generator / refiner training
+test_cfm_checkpoint.py    sampling from a CFM checkpoint
+train_damage_encoder.py   damage-state encoder
+train_hysteresis.py       hysteresis GRU (stage 1, older conditioning)
 ```
 
-Project notes are in [docs/](docs/README.md). Historical architecture notes are in `docs/archive/`.
-
-## Environment Setup
-
-
-
-### 1) Create and activate a virtual environment
+## Setup
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
+conda env create -f environment.yml -n internship
+conda activate internship
 ```
 
+Or with pip: `pip install -r requirements.txt`, then install the PyTorch wheel that matches your CUDA ([pytorch.org](https://pytorch.org/get-started/locally/)).
 
+Training jobs log to Weights & Biases when run with `--use_wandb` (needs `wandb login`); otherwise they write CSV logs.
 
-### 2) Install dependencies
+## Data
+
+Expected layout (run everything from the repository root):
+
+- `Data/Hysteresis/`: specimen info (`info.csv`, `info_w_mander_big.csv`), statistics, splits (`id_list_big.json`, `fold.json`), simulated hysteresis loops (`Simulate/`)
+- `Data/DamagePattern/`: `label.csv`, splits (`id_list_*.json`), damage masks (`mask/`), hand-labelled spalling polygons (`anylabel/`, `anylabel_r_spall.csv`)
+
+**Not included in this repository:** the original column photographs (`Data/DamagePattern/images/`), the measured hysteresis loops and their source XML (`Data/Hysteresis/Experiment/`, `Data/Hysteresis/xml/`), and the Mander / PDSHM source spreadsheets. Training the generator needs the photographs.
+
+## Running
+
+The scripts under `job/` are PBS jobs for our cluster (`qsub ...`). They `cd` to the submission directory and activate the `internship` conda environment through `job/DamagePatternGeneration/common.sh`; each script's header lists its options. See [job/README.md](job/README.md).
 
 ```bash
-pip install --upgrade pip
-pip install -r requirements.txt
+# Stage 1: damage-state encoder
+qsub -v MODEL=damage_state job/HysteresisPrediction/train_hysteresis.sh
+
+# Stage 2: V12 single-frame generator
+qsub -v LAYOUT_CACHE=<layout cache> job/DamagePatternGeneration/train_ADMCFM_v12.sh
+
+# Stage 3: temporal refiner (rfmv2 recipe)
+qsub -v RECIPE=rfmv2 job/DamagePatternGeneration/train_ADMCFM_v12refiner.sh
+
+# Stage 4: evaluation of the final checkpoints
+qsub -v CONFIG=job/evaluation/configs/eval_suite_final.json job/evaluation/eval_suite.sh
 ```
 
+To run without PBS, call the `python` command inside the job script directly from the repository root. The generator needs about 20 GB of GPU memory at 128 × 128.
 
-
-### 3) Install PyTorch
-
-Use the wheel that matches your CUDA: [https://pytorch.org/get-started/locally/](https://pytorch.org/get-started/locally/)
-
-```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-```
-
-
-
-### 4) Optional: Weights & Biases
-
-The cluster job `train_ADMCFM.sh` expects wandb login (`wandb login` or `WANDB_API_KEY`). Local runs can omit `--use_wandb` and use CSV logs.
-
-## Data Requirements
-
-Scripts expect:
-
-- `./Data/Hysteresis/...`
-- `./Data/DamagePattern/...`
-
-Typical files:
-
-- `Data/Hysteresis/id_list_*.json`
-- `Data/Hysteresis/info_w_mander_*.csv`
-- `Data/Hysteresis/statistics_*.csv`
-- `Data/DamagePattern/label.csv`
-- `Data/DamagePattern/mask/`
-- split json via `--data_path` (V9: `id_list_val_R307.json`)
-
-Generation also needs a frozen extractor at `./phase1_extractor/` (`best.ckpt` + `args.json`). Prepare with:
-
-```bash
-bash job/DamagePatternGeneration/prepare_extractor_from_hf.sh
-```
-
-
-
-## How to Run
-
-Run all commands from the project root.
-
-### 1) Train hysteresis predictor (Stage 1)
-
-Only needed if you are not using `phase1_extractor`:
-
-```bash
-python train_hysteresis.py --architecture HystereticGRU --epoch 100 --batch_size 8
-```
-
-
-
-### 2) Train damage-pattern generator (Stage 3, V9)
-
-This version uses nearly 20 GB of VRAM.
-
-Cluster (matches `results/DamagePatternGeneration/CFMADM/selfcondnoDI`):
-
-```bash
-qsub job/DamagePatternGeneration/train_ADMCFM.sh
-```
-
-Equivalent local flags (subset):
-
-```bash
-python train_mixed.py \
-  --architecture CFMADM \
-  --loss_type CFMADM \
-  --extractor_path ./phase1_extractor \
-  --data_path id_list_val_R307.json \
-  --condition_mode split \
-  --zero_di_condition True \
-  --self_condition True \
-  --use_wavelet_unet False \
-  --use_physics_cross_attn False \
-  --use_vss_l3_u3 True \
-  --use_patch_diffusion True \
-  --use_damage_mask_condition True \
-  --use_object_loss_mask False \
-  --latent_conditioning True \
-  --direction_conditioning True \
-  --include_di_conditioning True \
-  --image_size 128 \
-  --max_steps 15000
-```
-
-`--self_condition` is an architecture bool (alias `--use_self_conditioning`). Default is `True`. Set `False` only for a no-self-cond ablation; that checkpoint **cannot** load selfcondnoDI weights.
-
-### 3) Test a CFM checkpoint
-
-```bash
-bash job/DamagePatternGeneration/test_ADMCFM.sh
-```
-
-Default checkpoint: `results/DamagePatternGeneration/CFMADM/selfcondnoDI/checkpoint_step_014000.pt`. Override with `CKPT_PATH` / `RESULT_DIR`.
-
-### 4) Optional: DI regressor (evaluation, not used inside V9 CFM loss)
-
-```bash
-python train_resnet18_siamese.py
-python test_resnet18_siamese.py
-```
-
-Older ViT `train_quantification.py` remains available; V9 generation does not load it (`add_DI_loss=False`).
-
-## Evaluation scripts
-
-Under `scripts/eval/`, for example:
-
-- `eval_fid_ssim_lpips_cfm_cgan.py`
-- `eval_cfm_generated_r2_siamese.py`
-- `compute_test_lpips.py`
-
-Point them at a CFM `result_dir` that contains `args.json` and a `.pt` checkpoint.
-
-## Outputs
-
-Training writes under `./results/`:
-
-- `results/HystereticPrediction/...`
-- `results/DamagePatternGeneration/CFMADM/...`
-- `results/DamageQuantification/...`
-
-Each run stores `args.json`, checkpoints, and (if enabled) wandb artifacts.
-
-Reference V9 run: `results/DamagePatternGeneration/CFMADM/selfcondnoDI/`.
-
-## Notes
-
-- V9 is **not** the V8 CrossAttention U-Net and **not** the WaveletUNet job. Do not mix those checkpoints with `train_ADMCFM.sh` as it stands now.
-- Laplacian / cascade / VAE-latent jobs under `job/DamagePatternGeneration/` are optional experiments.
-- `--regressor_path` is only required when `--add_DI_loss True`.
-
-
-
-## Citation
-
-If you use this repository in academic work, please cite your associated paper/project and include a link to this repository.
+Outputs go to `results/` (one folder per run with `args.json`, checkpoints and logs). `results/` is not tracked.

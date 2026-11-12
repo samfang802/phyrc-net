@@ -54,7 +54,7 @@ flowchart TB
 |-------|-------|-------|--------|-----------------|
 | 1 | `HystereticGRU` | Simulated loop + material features | Force + `hidden_state [1024]` | `train_hysteresis.py` (frozen at `phase1_extractor` for generation) |
 | 3 | `CFMADM` / `ADMUNetCFM` | `z_t`, coords, mask, DI(+0), direction, GRU `g` | Velocity → ODE damage image | `train_mixed.py` via `train_ADMCFM.sh` |
-| Eval | `ResNet18SiameseLightning` | Generated / GT image | DI scalar, R² | `train_resnet18_siamese.py` |
+| Eval | `ResNet18SiameseLightning` | Generated / GT image | DI scalar, R² | `quantification/train_resnet18_siamese.py` |
 
 Stage 2 ViT `DamageQuantification` is **not** in the V9 generation path (`add_DI_loss=False`). DI for conditioning comes from `label.csv`. Siamese is the current image-to-DI evaluator.
 

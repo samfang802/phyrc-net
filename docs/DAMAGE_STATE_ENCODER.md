@@ -1,6 +1,6 @@
 # 損傷狀態編碼器（damage-state encoder）
 
-取代 GRU extractor（`phase1_extractor/`）當生成器條件的候選。動機見 [eval/condition_g.md](eval/condition_g.md)：GRU 的 g 是為了預測力而學的，將近一半的變異是加載正負號，雙向結構讓 g_t 混入了未來，Δg 量到的主要是方向翻轉，柱子特性和時間狀態也糾纏在一起。
+取代 GRU extractor（`phase1_extractor/`）當生成器條件的候選。動機見 [eval/archive/condition_g.md](eval/archive/condition_g.md)：GRU 的 g 是為了預測力而學的，將近一半的變異是加載正負號，雙向結構讓 g_t 混入了未來，Δg 量到的主要是方向翻轉，柱子特性和時間狀態也糾纏在一起。
 
 **狀態（2026-10-23）**：兩個版本都已訓練完並做過篩選（§5、§7），還**沒有**接進任何生成器。
 

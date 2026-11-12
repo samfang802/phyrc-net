@@ -412,6 +412,76 @@ def bind_cfm_options(
     self.use_refiner_residual = bool(kwargs.get("use_refiner_residual", False))
     self.refiner_chain_prob = float(kwargs.get("refiner_chain_prob", 0.5))
     self.refiner_state_noise_max = float(kwargs.get("refiner_state_noise_max", 0.05))
+    self.refiner_state_source = str(kwargs.get("refiner_state_source", "base") or "base")
+    if self.refiner_state_source not in ("base", "gt", "resample"):
+        raise ValueError(f"refiner_state_source must be base | gt | resample, got {self.refiner_state_source!r}")
+    self.refiner_resample_mu = float(kwargs.get("refiner_resample_mu", 0.5))
+    self.refiner_resample_sigma = float(kwargs.get("refiner_resample_sigma", 1.0))
+    self.refiner_resample_steps = int(kwargs.get("refiner_resample_steps", 8))
+    self.refiner_resample_warmup = int(kwargs.get("refiner_resample_warmup", 0))
+    # Share cap of resampled windows after the ramp: 1 - this share keeps the real S (conf 1, hops 0).
+    self.refiner_resample_max_p = float(kwargs.get("refiner_resample_max_p", 1.0))
+    # Crack-map recall / precision loss on the clean estimate (rfmv2 window loss), weight; 0 = off.
+    self.refiner_topo_loss_weight = float(kwargs.get("refiner_topo_loss_weight", 0.0))
+    # t_s groups per batch: windows are split into this many groups, each with its own t_s draw.
+    self.refiner_resample_groups = max(1, int(kwargs.get("refiner_resample_groups", 1)))
+    self._last_refiner_resample_t = 1.0
+    self._last_refiner_resample_frac = 0.0
+    # Linear ramp of the resampled share (per sample) from 0 to 1 over this many steps after the warm-up.
+    self.refiner_resample_ramp = int(kwargs.get("refiner_resample_ramp", 0))
+    # S confidence channel (resample only): a constant hint channel, t_s for resampled rows and 1 for real
+    # previous frames in training; refiner_state_conf_value (set at sampling) for the model's own frames.
+    self.refiner_state_conf = bool(kwargs.get("refiner_state_conf", False))
+    self.refiner_state_conf_value = float(kwargs.get("refiner_state_conf_value", 1.0))
+    # Second confidence channel (rfmv2): self-generated hops behind S, min(h, L) / L with L = refiner_window.
+    self.refiner_state_conf_hops = bool(kwargs.get("refiner_state_conf_hops", False))
+    self.refiner_conf_hint_channels = (1 + int(self.refiner_state_conf_hops)) if self.refiner_state_conf else 0
+    if self.refiner_state_conf_hops and not self.refiner_state_conf:
+        raise ValueError("--refiner_state_conf_hops requires --refiner_state_conf")
+    # rfmv2 (docs/RFMV2_ARCHITECTURE.md): window training with autoregressive self-resampling.
+    self.refiner_window = int(kwargs.get("refiner_window", 0))
+    self.refiner_resample_solver = str(kwargs.get("refiner_resample_solver", "euler")).lower()
+    self.refiner_false_mem_weight = float(kwargs.get("refiner_false_mem_weight", 1.0))
+    # Ring-Forcing-style A-D-R (docs/RFMV2_ARCHITECTURE.md §9): share of window targets whose S has the damage
+    # cracks that the memory and the target both hold erased, so only the memory can supply them.
+    self.refiner_erase_prob = float(kwargs.get("refiner_erase_prob", 0.0))
+    if not (0.0 <= self.refiner_erase_prob <= 1.0):
+        raise ValueError("refiner_erase_prob in [0, 1]")
+    self._last_erase_frac = self._last_erase_px = 0.0
+    # rfmv2b (src/model/cfm/rollout_bank.py): what fills the erased S. gray = the cracks erased and filled from
+    # the surroundings (rfmv2x); bank = the model's own rollout degradation pasted into random feathered cells
+    # (refiner_erase_prob = share of targets), its structure error injected into the memory
+    # (refiner_bank_mem_err_prob = share of targets). The bank is built by the RolloutBankCallback.
+    self.refiner_erase_source = str(kwargs.get("refiner_erase_source", "gray")).lower()
+    if self.refiner_erase_source not in ("gray", "bank"):
+        raise ValueError("refiner_erase_source must be gray|bank")
+    self.refiner_bank_mem_err_prob = float(kwargs.get("refiner_bank_mem_err_prob", 0.0))
+    self.refiner_bank_grid = int(kwargs.get("refiner_bank_grid", 8))
+    self.refiner_bank_rate = tuple(float(v) for v in str(kwargs.get("refiner_bank_rate", "0.25,0.75")).split(","))
+    self.refiner_bank_feather = float(kwargs.get("refiner_bank_feather", 4.0))
+    if len(self.refiner_bank_rate) != 2 or not (0.0 <= self.refiner_bank_rate[0] <= self.refiner_bank_rate[1] <= 1.0):
+        raise ValueError("refiner_bank_rate: lo,hi in [0, 1]")
+    self._rollout_bank = None
+    self._last_bank_paste_frac = self._last_bank_paste_px = self._last_bank_err_frac = 0.0
+    self.refiner_memory_gain = bool(kwargs.get("refiner_memory_gain", False))
+    self.refiner_memory_scale_early = float(kwargs.get("refiner_memory_scale_early", 1.0))
+    self.refiner_memory_scale_late = float(kwargs.get("refiner_memory_scale_late", 1.0))
+    self.refiner_memory_scale_t = float(kwargs.get("refiner_memory_scale_t", 0.5))
+    self._in_hop = False
+    if self.refiner_window < 0 or not (0.0 <= self.refiner_false_mem_weight <= 1.0) \
+            or self.refiner_resample_solver not in ("euler", "heun"):
+        raise ValueError("refiner_window >= 0, refiner_false_mem_weight in [0, 1], refiner_resample_solver euler|heun")
+    self._refiner_state_conf_rows = None
+    # Sampling: frame 0 = one refiner hop on the base's frame 0 (S = that frame, frame 0's own conditions).
+    self.refiner_frame0_hop = bool(kwargs.get("refiner_frame0_hop", False))
+    if self.refiner_resample_ramp < 0:
+        raise ValueError("refiner_resample_ramp must be >= 0")
+    if self.refiner_window > 0 and not (self.refiner_state_source == "resample" and self.refiner_state_conf):
+        raise ValueError("--refiner_window needs --refiner_state_source resample and --refiner_state_conf")
+    if self.refiner_state_conf and self.refiner_state_source != "resample":
+        raise ValueError("--refiner_state_conf requires --refiner_state_source resample")
+    if self.refiner_resample_sigma < 0.0 or self.refiner_resample_steps < 1 or self.refiner_resample_warmup < 0:
+        raise ValueError("refiner_resample_sigma >= 0, refiner_resample_steps >= 1, refiner_resample_warmup >= 0")
     if not (0.0 <= self.refiner_chain_prob <= 1.0):
         raise ValueError(f"refiner_chain_prob must be in [0, 1], got {self.refiner_chain_prob}")
     if self.refiner_state_noise_max < 0.0:
@@ -469,6 +539,7 @@ def bind_cfm_options(
     self.refiner_tone_loss_weight = float(kwargs.get("refiner_tone_loss_weight", 0.0))
     self.refiner_shared_lowfreq_noise = bool(kwargs.get("refiner_shared_lowfreq_noise", False))
     self.refiner_lowfreq_block = int(kwargs.get("refiner_lowfreq_block", 16))
+    self.refiner_state_cache = bool(kwargs.get("refiner_state_cache", False))
     if self.refiner_implicit and not self.use_refiner_residual:
         raise ValueError("--refiner_implicit requires --use_refiner_residual")
     if self.refiner_target_x1 and not self.use_refiner_residual:
@@ -483,6 +554,117 @@ def bind_cfm_options(
         raise ValueError(f"refiner_state_damage_shrink must be in (0, 1], got {self.refiner_state_damage_shrink}")
     if self.refiner_lowfreq_block < 1:
         raise ValueError(f"refiner_lowfreq_block must be >= 1, got {self.refiner_lowfreq_block}")
+    # Bidirectional refiner without a base: the hint is [prev | next | k_prev | k_next], each neighbor the
+    # real frame at its own noise level k (0 = pure noise = absent). All frames are sampled jointly.
+    self.refiner_neighbors = bool(kwargs.get("refiner_neighbors", False))
+    self.refiner_nbr_tied_prob = float(kwargs.get("refiner_nbr_tied_prob", 0.4))
+    self.refiner_nbr_ahead_prob = float(kwargs.get("refiner_nbr_ahead_prob", 0.2))
+    self.refiner_nbr_ahead_max = float(kwargs.get("refiner_nbr_ahead_max", 0.2))
+    self.refiner_nbr_drop_prob = float(kwargs.get("refiner_nbr_drop_prob", 0.25))
+    self.refiner_joint_mode = str(kwargs.get("refiner_joint_mode", "sweep") or "sweep")
+    self.refiner_nbr_delta_g = bool(kwargs.get("refiner_nbr_delta_g", False))
+    if self.refiner_nbr_delta_g and not (self.refiner_neighbors and self.use_delta_g):
+        raise ValueError("--refiner_nbr_delta_g requires --refiner_neighbors and --use_delta_g")
+    if self.refiner_neighbors:
+        if not (self.refiner_implicit and self.refiner_target_x1):
+            raise ValueError("--refiner_neighbors requires --refiner_implicit and --refiner_target_x1")
+        if bool(kwargs.get("refiner_state_cache", False)):
+            raise ValueError("--refiner_neighbors has no state track: set --refiner_state_cache False")
+        p = (self.refiner_nbr_tied_prob, self.refiner_nbr_ahead_prob)
+        if min(p) < 0.0 or sum(p) > 1.0:
+            raise ValueError(f"refiner_nbr_tied_prob + refiner_nbr_ahead_prob must lie in [0, 1], got {p}")
+        if not (0.0 <= self.refiner_nbr_drop_prob < 1.0):
+            raise ValueError(f"refiner_nbr_drop_prob must be in [0, 1), got {self.refiner_nbr_drop_prob}")
+    if self.refiner_joint_mode not in ("parallel", "sweep", "causal", "none"):
+        raise ValueError(f"refiner_joint_mode must be parallel|sweep|causal|none, got {self.refiner_joint_mode!r}")
+    # ILF-lite (src/model/cfm/refiner_memory.py): the running min of thin dark structure as an extra hint channel.
+    self.refiner_memory = bool(kwargs.get("refiner_memory", False))
+    self.refiner_memory_sigma = float(kwargs.get("refiner_memory_sigma", 2.0))
+    self.refiner_memory_drop_prob = float(kwargs.get("refiner_memory_drop_prob", 0.1))
+    self.refiner_memory_tau = float(kwargs.get("refiner_memory_tau", 0.15))
+    self.refiner_memory_window = int(kwargs.get("refiner_memory_window", 7))
+    # Read side, In-Context-Forcing style (phase1_ilf.md §11): the memory channel is visible only for flow time
+    # tau < refiner_memory_tmax (t = 0 noise, 1 data), in training and at sampling; 1 = always.
+    self.refiner_memory_tmax = float(kwargs.get("refiner_memory_tmax", 1.0))
+    if not (0.0 < self.refiner_memory_tmax <= 1.0):
+        raise ValueError("refiner_memory_tmax must be in (0, 1]")
+    if self.refiner_memory:
+        if not (self.refiner_implicit and self.refiner_target_x1) or self.refiner_neighbors:
+            raise ValueError("--refiner_memory requires --refiner_implicit and --refiner_target_x1, without neighbors")
+        if self.refiner_memory_sigma <= 0.0 or not (0.0 <= self.refiner_memory_drop_prob < 1.0):
+            raise ValueError("refiner_memory_sigma > 0 and refiner_memory_drop_prob in [0, 1)")
+        if self.refiner_memory_tau < 0.0 or self.refiner_memory_window < 1:
+            raise ValueError("refiner_memory_tau >= 0 and refiner_memory_window >= 1")
+    # Full-ILF switches: Kaiser write gate, learned encoder E (frozen trunk = --freeze_trunk).
+    self.refiner_memory_gate = str(kwargs.get("refiner_memory_gate", "none") or "none")
+    self.refiner_memory_encoder = bool(kwargs.get("refiner_memory_encoder", False))
+    self.refiner_memory_channels = int(kwargs.get("refiner_memory_channels", 4))
+    self.refiner_memory_input = str(kwargs.get("refiner_memory_input", "raw") or "raw")
+    self.refiner_memory_aux_weight = float(kwargs.get("refiner_memory_aux_weight", 0.0))
+    if (self.refiner_memory_input != "raw" or self.refiner_memory_aux_weight > 0.0) and not self.refiner_memory_encoder:
+        raise ValueError("--refiner_memory_input / --refiner_memory_aux_weight require --refiner_memory_encoder")
+    if self.refiner_memory_aux_weight > 0.0 and self.refiner_memory_input == "raw":
+        raise ValueError("--refiner_memory_aux_weight needs a signed input (hp / delta / hpnew), not raw")
+    self.refiner_memory_aux_loss = str(kwargs.get("refiner_memory_aux_loss", "l1") or "l1")
+    self.refiner_memory_input_scale = float(kwargs.get("refiner_memory_input_scale", 1.0))
+    self.refiner_memory_contrast_aug = float(kwargs.get("refiner_memory_contrast_aug", 1.0))
+    self.refiner_memory_sparse_weight = float(kwargs.get("refiner_memory_sparse_weight", 0.0))
+    self.refiner_memory_lr_mult = float(kwargs.get("refiner_memory_lr_mult", 1.0))
+    if self.refiner_memory_aux_loss not in ("l1", "bce_dice"):
+        raise ValueError(f"refiner_memory_aux_loss must be l1|bce_dice, got {self.refiner_memory_aux_loss!r}")
+    if not (0.0 < self.refiner_memory_contrast_aug <= 1.0) or self.refiner_memory_input_scale <= 0.0 \
+            or self.refiner_memory_sparse_weight < 0.0 or self.refiner_memory_lr_mult <= 0.0:
+        raise ValueError("refiner_memory_contrast_aug in (0, 1], _input_scale > 0, _sparse_weight >= 0, _lr_mult > 0")
+    if not self.refiner_memory_encoder and (
+        self.refiner_memory_input_scale != 1.0 or self.refiner_memory_contrast_aug < 1.0
+        or self.refiner_memory_sparse_weight > 0.0 or self.refiner_memory_lr_mult != 1.0
+    ):
+        raise ValueError("refiner_memory_input_scale / _contrast_aug / _sparse_weight / _lr_mult need the encoder")
+    if self.refiner_memory_gate not in ("none", "kaiser", "novelty"):
+        raise ValueError(f"refiner_memory_gate must be none|kaiser|novelty, got {self.refiner_memory_gate!r}")
+    if (self.refiner_memory_gate != "none" or self.refiner_memory_encoder) and not self.refiner_memory:
+        raise ValueError("--refiner_memory_gate / --refiner_memory_encoder require --refiner_memory")
+    if self.refiner_memory_encoder and self.refiner_memory_channels < 1:
+        raise ValueError("refiner_memory_channels must be >= 1")
+    # Self-confirmation switches (rule memory): novelty gate, TTL, error recycling.
+    self.refiner_memory_novelty = float(kwargs.get("refiner_memory_novelty", 0.005))
+    self.refiner_memory_ttl = int(kwargs.get("refiner_memory_ttl", 0))
+    self.refiner_memory_recycle = bool(kwargs.get("refiner_memory_recycle", False))
+    self.refiner_memory_recycle_clean = float(kwargs.get("refiner_memory_recycle_clean", 0.3))
+    self.refiner_memory_recycle_transplant = float(kwargs.get("refiner_memory_recycle_transplant", 0.5))
+    self.refiner_memory_recycle_n = int(kwargs.get("refiner_memory_recycle_n", 8))
+    self.refiner_memory_recycle_tmin = float(kwargs.get("refiner_memory_recycle_tmin", 0.5))
+    self.refiner_memory_recycle_start = int(kwargs.get("refiner_memory_recycle_start", 0))
+    if self.refiner_memory_recycle_start < 0:
+        raise ValueError("refiner_memory_recycle_start must be >= 0")
+    if self.refiner_memory_encoder and (
+        self.refiner_memory_gate == "novelty" or self.refiner_memory_ttl > 0 or self.refiner_memory_recycle
+    ):
+        raise ValueError("novelty gate / refiner_memory_ttl / refiner_memory_recycle are rule-memory only")
+    if (self.refiner_memory_ttl > 0 or self.refiner_memory_recycle) and not self.refiner_memory:
+        raise ValueError("--refiner_memory_ttl / --refiner_memory_recycle require --refiner_memory")
+    if self.refiner_memory_ttl < 0 or not (0.0 <= self.refiner_memory_novelty < 1.0):
+        raise ValueError("refiner_memory_ttl >= 0 and refiner_memory_novelty in [0, 1)")
+    if not (0.0 <= self.refiner_memory_recycle_clean < 1.0 and 0.0 <= self.refiner_memory_recycle_transplant <= 1.0
+            and self.refiner_memory_recycle_n >= 1 and 0.0 <= self.refiner_memory_recycle_tmin < 1.0):
+        raise ValueError("refiner_memory_recycle_clean in [0, 1), _transplant in [0, 1], _n >= 1, _tmin in [0, 1)")
+    self._memory_err = None
+    self._memory_err_ok = None
+    self.refiner_memory_hint_channels = (
+        0 if not self.refiner_memory else self.refiner_memory_channels if self.refiner_memory_encoder else 1
+    )
+    if self.refiner_window > 0 and (not self.refiner_memory or self.refiner_memory_encoder
+                                    or getattr(self, "refiner_memory_recycle", False)):
+        raise ValueError("--refiner_window needs the rule memory (--refiner_memory, no encoder, no recycle)")
+    self._memory_frames = None
+    self.memory_encoder = None
+    if self.refiner_memory_encoder:
+        from src.model.cfm.refiner_memory import MemoryEncoder
+
+        self.memory_encoder = MemoryEncoder(self.refiner_memory_channels, input_mode=self.refiner_memory_input,
+                                            aux=self.refiner_memory_aux_weight > 0.0,
+                                            input_scale=self.refiner_memory_input_scale,
+                                            aux_loss=self.refiner_memory_aux_loss)
     self.repel_prev_scale = float(kwargs.get("repel_prev_scale", 0.0))
     self.repel_prev_mode = str(kwargs.get("repel_prev_mode", "x1")).lower()
     if self.repel_prev_mode not in ("x1", "state"):
@@ -721,8 +903,13 @@ def bind_cfm_options(
         **(
             {
                 "use_control_branch": True,
-                "control_hint_channels": self.model_in_channels,
+                "control_hint_channels": (
+                    2 * self.model_in_channels + 2 if self.refiner_neighbors
+                    else self.model_in_channels + self.refiner_memory_hint_channels
+                    + self.refiner_conf_hint_channels
+                ),
                 "control_delta_g": self.use_delta_g,
+                "control_delta_g_next": self.refiner_nbr_delta_g,
                 "control_inject_encoder": self.control_inject_encoder,
                 "control_hint_only": self.control_hint_only,
             }

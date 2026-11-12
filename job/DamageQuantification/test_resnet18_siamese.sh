@@ -38,7 +38,7 @@ echo "[test_resnet18_siamese] RESULT_DIR=${RESULT_DIR}"
 echo "[test_resnet18_siamese] SPLIT=${SPLIT} BATCH_SIZE=${BATCH_SIZE}"
 echo "[test_resnet18_siamese] CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
 
-python3 -u test_resnet18_siamese.py \
+python3 -u -m quantification.test_resnet18_siamese \
   --ckpt "${CKPT_PATH}" \
   --result_dir "${RESULT_DIR}" \
   --split "${SPLIT}" \

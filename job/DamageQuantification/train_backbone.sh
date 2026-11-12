@@ -5,7 +5,7 @@
 #PBS -e log/train_backbone.err
 #PBS -N DI_backbone
 
-# DI regressor with a pretrained torchvision backbone (train_quantification.py).
+# DI regressor with a pretrained torchvision backbone (quantification/train_quantification.py).
 # Replaces train_{resnet101,swin_b,vit_b_16,vit_b_32,vit_l_16,vit_l_32}.sh, which pointed at the old
 # repo path and the removed `hysteresis` conda env. The learning rate and epochs below are the ones
 # those scripts used; override with LR / EPOCH.
@@ -28,5 +28,5 @@ esac
 LR="${LR:-${lr}}"
 EPOCH="${EPOCH:-${ep}}"
 mkdir -p log
-python3 train_quantification.py --lr "${LR}" --epoch "${EPOCH}" --batch_size "${BATCH_SIZE:-8}" \
+python3 -m quantification.train_quantification --lr "${LR}" --epoch "${EPOCH}" --batch_size "${BATCH_SIZE:-8}" \
     --backbone "${BACKBONE}" --pretrained 2>&1 | tee "log/train_${BACKBONE}.log"

@@ -30,7 +30,7 @@ Nothing in this file is a measured result unless it says so.
 
 ## 1. Why (from the v10.5 evaluation)
 
-> 2026-10-29: DINOv3 metrics in this section (KID, progression ratio, neighbour contrast, saturated frames) are JPEG-q75 aligned (`<suite>/<split>/kid_jpeg75/`, see `docs/eval/protocol.md`). Texture and temporal metrics are unaffected.
+> 2026-10-29: DINOv3 metrics in this section (KID, progression ratio, neighbour contrast, saturated frames) are JPEG-q75 aligned (`<suite>/<split>/kid_jpeg75/`, see `docs/eval/archive/protocol.md`). Texture and temporal metrics are unaffected.
 
 Measured on test (`results/eval_suite/v105/test/summary_jpeg75.md`, `results/eval_suite/quick/test/summary_jpeg75.md`; gn / V10 refiner from `results/eval_suite/jpeg75/test/summary.md`, unpaired):
 

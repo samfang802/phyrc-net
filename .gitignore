@@ -44,6 +44,8 @@ Thumbs.db
 # Leading slash: only the repo-root folders. `data/` would also hide src/data.
 /data/
 /Data/
+/mander/
+/PDSHM/
 results/
 log/
 cGANckpt/
@@ -55,6 +57,7 @@ notebook/
 generation/
 phase1_extractor/
 third_party/PlotNeuralNet/
+third_party/guided-diffusion/
 job.sh
 draw.ipynb
 best.ckpt
@@ -63,3 +66,11 @@ dist/
 
 # Working notes kept local
 /docs/redesign/
+
+# Suite configs written by experiment scripts (job/README.md); only the shared ones are tracked
+/job/evaluation/configs/*.json
+!/job/evaluation/configs/eval_suite_models.json
+!/job/evaluation/configs/eval_suite_final.json
+!/job/evaluation/configs/eval_suite_cgan_clahe.json
+!/job/evaluation/configs/eval_suite_v12.template.json
+!/job/evaluation/configs/eval_suite_fiber_layout.json

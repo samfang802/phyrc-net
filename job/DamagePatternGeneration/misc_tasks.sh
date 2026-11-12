@@ -17,8 +17,9 @@
 #                               EXTRA="--eval_only --samples ..." to only evaluate new samples
 #   TASK=phase0_spd_onset       PEER SPD onset drift vs the 6 image columns; needs XML_DIR (per-specimen xml)
 #   TASK=clock_condition_probe  does the KF damage clock tau add to the v11 condition? ridge + MLP probes
-#   TASK=kid_jpeg               re-score finished suites with JPEG-q75-aligned DINOv3 metrics (docs/eval/protocol.md);
-#                               SUITES="results/eval_suite/v105 ..." (default: every suite the docs quote)
+#   TASK=fiber_clock            fiber-section damage clocks vs hand-labelled spall area (CPU, ~1 min)
+#   TASK=kid_jpeg               re-score finished suites with JPEG-q75-aligned DINOv3 metrics (docs/eval/archive/protocol.md);
+#                               SUITES="results/eval_suite/v105 ..." (default: the suites still on disk)
 #   qsub -v TASK=dataset_audit job/DamagePatternGeneration/misc_tasks.sh
 cd "${PBS_O_WORKDIR:-$HOME/intership-project}"
 source job/DamagePatternGeneration/common.sh
@@ -48,10 +49,11 @@ case "${TASK}" in
         python3 -u scripts/eval/phase0_spd_onset.py --xml_dir "${XML_DIR:?XML_DIR is required}" ;;
     clock_condition_probe)
         python3 -u scripts/eval/clock_condition_probe.py ;;
+    fiber_clock)
+        mkdir -p results/phase1_fiber_clock
+        python3 -u scripts/eval/phase1_fiber_clock.py --out results/phase1_fiber_clock \
+            | tee results/phase1_fiber_clock/report.txt ;;
     kid_jpeg)
-        python3 -u scripts/eval/rerun_kid_jpeg.py ${SUITES:-$S/v105 $S/quick $S/v106 $S/v106C $S/v11 $S/v11_gru $S/v11_fog \
-            $S/v11_refiner $S/v11app_refiner $S/tier0_churn $S/phase0_guidance $S/phase1_opaflow \
-            results/phase0_layout_oracle/eval_suite results/phase0_layout_oracle/eval_suite_scratch \
-            results/phase1_c2/eval_suite results/phase1_layout_harness/eval_suite_coarse results/phase1_ofp/eval_suite} ;;
+        python3 -u scripts/eval/rerun_kid_jpeg.py ${SUITES:-$S/v105 $S/v106 $S/v106C $S/v11app_refiner $S/v12gtrefiner $S/final} ;;
     *) echo "unknown TASK=${TASK}"; exit 1 ;;
 esac

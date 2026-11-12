@@ -266,7 +266,8 @@ class ControlBranch(nn.Module):
     """
 
     def __init__(
-        self, trunk, hint_channels, cond_dim, physics_dim=1024, use_delta_g=False, alpha_dim="scalar", hint_only=False
+        self, trunk, hint_channels, cond_dim, physics_dim=1024, use_delta_g=False, alpha_dim="scalar", hint_only=False,
+        use_delta_g_next=False,
     ):
         super().__init__()
         import copy
@@ -315,6 +316,12 @@ class ControlBranch(nn.Module):
             self.physics_linear_delta = nn.Linear(int(physics_dim), int(cond_dim), bias=False)
             shape = (int(cond_dim),) if str(alpha_dim) == "vector" else (1,)
             self.alpha_dg = nn.Parameter(torch.zeros(shape))
+        # Bidirectional refiner: g_{t+1} - g_t, so the branch knows how much the next-frame hint has moved on.
+        self.use_delta_g_next = bool(use_delta_g_next)
+        if self.use_delta_g_next:
+            self.physics_linear_delta_next = nn.Linear(int(physics_dim), int(cond_dim), bias=False)
+            shape = (int(cond_dim),) if str(alpha_dim) == "vector" else (1,)
+            self.alpha_dg_next = nn.Parameter(torch.zeros(shape))
 
     @torch.no_grad()
     def copy_from_trunk(self, trunk):
@@ -324,14 +331,30 @@ class ControlBranch(nn.Module):
         for name in ("in_conv", "down_blocks", "downsamples", "l2_vss", "l3_vss", "mid_block1", "mid_attn", "mid_block2"):
             getattr(self, name).load_state_dict(getattr(trunk, name).state_dict())
 
-    def forward(self, x, cond, hint, gru_delta=None):
+    def forward(self, x, cond, hint, gru_delta=None, gru_delta_next=None):
         """Returns (per-skip residuals in trunk skip order, mid residual or None when hint-only)."""
         if self.use_delta_g and gru_delta is not None:
             cond = cond + self.alpha_dg * self.physics_linear_delta(gru_delta)
+        if self.use_delta_g_next and gru_delta_next is not None:
+            cond = cond + self.alpha_dg_next * self.physics_linear_delta_next(gru_delta_next)
         if hint.shape[-2:] != x.shape[-2:]:
             raise ValueError(f"control hint {tuple(hint.shape)} must match input {tuple(x.shape)}")
         hint = hint.to(dtype=x.dtype)
-        h = self.in_conv(hint) if self.hint_only else self.in_conv(x) + self.hint_block(hint)
+        if self.hint_only:
+            h = self.in_conv(hint)
+        else:
+            hb = self.hint_block(hint)
+            dc = getattr(self, "_conf_dc", None)  # (ref, keep, n_conf): set by the sampler, None = off
+            if dc is not None:
+                # The confidence planes are spatially constant: keep only the spatially varying part of what they
+                # change against a reference confidence, scale their mean (DC) change by ``keep``.
+                ref, keep, n_cf = dc
+                hint_ref = hint.clone()
+                hint_ref[:, hint.shape[1] - n_cf] = float(ref)
+                hb_ref = self.hint_block(hint_ref)
+                d = hb - hb_ref
+                hb = hb_ref + d - (1.0 - float(keep)) * d.mean(dim=(-2, -1), keepdim=True)
+            h = self.in_conv(x) + hb
         outs = []
         k = 0
         for i, blocks in enumerate(self.down_blocks):
@@ -404,6 +427,7 @@ class ADMUNetCFM(nn.Module):
         control_delta_g=False,
         control_inject_encoder=False,
         control_hint_only=False,
+        control_delta_g_next=False,
     ):
         super().__init__()
         if use_split_conditioning and use_physics_adagn:
@@ -727,6 +751,7 @@ class ADMUNetCFM(nn.Module):
                 use_delta_g=control_delta_g,
                 alpha_dim=self.gated_fusion_alpha_dim,
                 hint_only=control_hint_only,
+                use_delta_g_next=control_delta_g_next,
             )
         else:
             self.control = None
@@ -942,6 +967,7 @@ class ADMUNetCFM(nn.Module):
         gru_delta=None,
         control_hint=None,
         control_scale=None,
+        gru_delta_next=None,
     ):
         """
         Dual-Track OT-CFM U-Net velocity prediction.
@@ -976,7 +1002,9 @@ class ADMUNetCFM(nn.Module):
         if control_hint is not None:
             if self.control is None:
                 raise ValueError("control_hint given but the net has no control branch")
-            ctrl_skips, ctrl_mid = self.control(z_t, cond, control_hint, gru_delta=gru_delta)
+            ctrl_skips, ctrl_mid = self.control(
+                z_t, cond, control_hint, gru_delta=gru_delta, gru_delta_next=gru_delta_next
+            )
             if control_scale is not None:
                 s = control_scale
                 if torch.is_tensor(s) and s.ndim > 0:

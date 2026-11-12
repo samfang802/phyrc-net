@@ -103,12 +103,22 @@ class PatternLoopDataset(Dataset):
         ) or bool(kwargs.get("use_paired_bridge", False)) or bool(
             kwargs.get("use_refiner_residual", False)
         )
+        # Bidirectional refiner: the next frame of the sequence as a second neighbor (no state track, no prev2).
+        self.use_next = bool(kwargs.get("refiner_neighbors", False))
         # Refiner chain training also needs the frame before the previous one.
-        self.use_prev2 = bool(kwargs.get("use_refiner_residual", False))
+        self.use_prev2 = bool(kwargs.get("use_refiner_residual", False)) and not self.use_next
         # v10.5: one photometric draw for all frames of a sample; offline base states (attach_state_cache).
         self.share_photometric_aug = bool(kwargs.get("share_photometric_aug", False)) and self.mode == "train"
         self._state_cache = None
+        self._memory_cache = None
+        self._memory_rows = None
+        self._memory_row = None
         self._prev_iloc = self._build_prev_iloc_map() if self.use_ar_temporal_pairing else None
+        self._next_iloc = None
+        if self.use_next and self._prev_iloc is not None:
+            self._next_iloc = np.full(len(self._prev_iloc), -1, dtype=np.int64)
+            has = self._prev_iloc >= 0
+            self._next_iloc[self._prev_iloc[has]] = np.nonzero(has)[0]
         self._missing_object_mask = set()
         self.image_size = int(kwargs.get("image_size", 128))
         self._info_cache = {}
@@ -466,9 +476,12 @@ class PatternLoopDataset(Dataset):
             path = os.path.join(self.root, "DamagePattern", os.path.basename(path))
         if not os.path.isfile(path):
             raise FileNotFoundError(f"layout_cond: SDF cache not found: {path} (scripts/export/export_anylabel_layout_sdf.py)")
+        self.layout_cache_path = path
         z = np.load(path)
         # NpzFile re-decompresses on every z["sdf"]; read once so each entry is a view of one array.
         sdf = np.asarray(z["sdf"], dtype=np.float32)
+        # (N, H, W): one layout per frame (AnyLabel). (N, K, H, W): K layouts per frame (e.g. predicted hspP
+        # layouts, scripts/eval/build_train_layout_cache.py); each draw picks one of them at random.
         table = {str(f): sdf[i] for i, f in enumerate(z["filename"])}
         missing = [f for f in self.label["filename"] if f not in table]
         print(
@@ -479,13 +492,16 @@ class PatternLoopDataset(Dataset):
         )
         return table
 
-    def _layout_tensor(self, filename, flipped, like):
+    def _layout_tensor(self, filename, flipped, like, drop=True):
         """[1,H,W] SDF in [-1,1] (0 = no layout), flipped with the image; dropped with layout_drop_prob."""
         h, w = like.shape[-2], like.shape[-1]
         sdf = self._layout.get(str(filename))
-        if sdf is None or (self.layout_drop_prob > 0.0 and float(torch.rand(())) < self.layout_drop_prob):
+        if sdf is None or (drop and self.layout_drop_prob > 0.0 and float(torch.rand(())) < self.layout_drop_prob):
             return torch.zeros((1, h, w), dtype=like.dtype)
-        x = torch.from_numpy(np.asarray(sdf, dtype=np.float32))[None]
+        sdf = np.asarray(sdf, dtype=np.float32)
+        if sdf.ndim == 3:
+            sdf = sdf[int(torch.randint(sdf.shape[0], ()))]
+        x = torch.from_numpy(sdf)[None]
         if tuple(x.shape[-2:]) != (h, w):
             x = F.interpolate(x[None], size=(h, w), mode="bilinear", align_corners=False)[0]
         if flipped:
@@ -503,6 +519,29 @@ class PatternLoopDataset(Dataset):
             raise KeyError(f"state cache lacks {len(missing)} frames of the {self.mode} split, e.g. {missing[:3]}")
         self._state_cache = states
 
+    def attach_memory_cache(self, memory):
+        """``memory``: {filename: (1, H, W)} structure memory before that frame (src/model/cfm/refiner_memory.py).
+        Each item then carries ``memory_prev``, flipped with the sample."""
+        missing = [f for f in self.label["filename"].tolist() if f not in memory]
+        if missing:
+            raise KeyError(f"memory cache lacks {len(missing)} frames of the {self.mode} split, e.g. {missing[:3]}")
+        self._memory_cache = memory
+
+    def attach_memory_rows(self, rows_of, row_of=None):
+        """``rows_of``: {filename: int64 array} global rows of the earlier frames that write the memory
+        (src/model/cfm/refiner_memory.build_memory_rows). Each item then carries ``memory_rows`` (padded with -1
+        to the split's longest) and ``flipped``; with ``row_of`` ({filename: its own global row}) also ``memory_row``."""
+        missing = [f for f in self.label["filename"].tolist() if f not in rows_of or (row_of is not None and f not in row_of)]
+        if missing:
+            raise KeyError(f"memory rows lack {len(missing)} frames of the {self.mode} split, e.g. {missing[:3]}")
+        width = max(1, max(len(v) for v in rows_of.values()))
+        self._memory_rows = {}
+        for f, v in rows_of.items():
+            row = torch.full((width,), -1, dtype=torch.long)
+            row[: len(v)] = torch.as_tensor(v, dtype=torch.long)
+            self._memory_rows[f] = row
+        self._memory_row = None if row_of is None else {f: torch.tensor(int(r), dtype=torch.long) for f, r in row_of.items()}
+
     def _cached_state(self, filename, flipped):
         bank = self._state_cache[filename]
         x = bank[int(torch.randint(0, bank.shape[0], ()).item())].float()
@@ -511,7 +550,8 @@ class PatternLoopDataset(Dataset):
         return x.expand(3, -1, -1).contiguous()
 
     def _load_frame(
-        self, filename, exp, direction, timestep, DI, force_flip=None, apply_random_erasing=True, photo_rng=None
+        self, filename, exp, direction, timestep, DI, force_flip=None, apply_random_erasing=True, photo_rng=None,
+        layout_drop=True,
     ):
         """Load one damage frame (image + GRU + masks). Shared flip via force_flip, shared
         photometric draw via photo_rng (a torch RNG state)."""
@@ -570,7 +610,8 @@ class PatternLoopDataset(Dataset):
         if self.layout_cond:
             if condition_mask is None:
                 raise ValueError("layout_cond needs use_damage_mask_condition (the layout rides on the condition mask)")
-            condition_mask = torch.cat([condition_mask, self._layout_tensor(filename, flipped, image)], dim=0)
+            condition_mask = torch.cat([condition_mask, self._layout_tensor(filename, flipped, image, drop=layout_drop)],
+                                       dim=0)
 
         if not self.use_object_loss_mask:
             loss_mask = torch.ones((1, image.shape[-2], image.shape[-1]), dtype=image.dtype)
@@ -607,9 +648,77 @@ class PatternLoopDataset(Dataset):
             return image, hidden_state, direction_tensor, exp, timestep, DI, info, condition_mask
         return image, hidden_state, direction_tensor, exp, timestep, DI, info
 
+    def enable_window(self, length, warm):
+        """rfmv2 window items (docs/RFMV2_ARCHITECTURE.md): each item is ``warm`` real frames, an anchor and the
+        ``length`` frames after it, consecutive in one (exp, direction) walk. Every anchor with ``length`` frames
+        after it is one item; positions before the walk start are -1 (``win_valid`` 0). Needs the memory cache
+        (``win_mem0`` = memory before the anchor)."""
+        if self._memory_cache is None:
+            raise ValueError("enable_window needs attach_memory_cache first")
+        wins, static = [], []
+        for _, group in self.label.groupby(["exp", "direction"], sort=True):
+            order = group.sort_values("timestep", kind="stable").index.to_numpy(dtype=np.int64)
+            for a in range(0, len(order) - int(length)):
+                idx = [order[q] if q >= 0 else -1 for q in range(a - int(warm), a + int(length) + 1)]
+                wins.append(idx)
+                static.append(order[1])  # memory before the walk's 2nd frame = frame 0's structure
+        if not wins:
+            raise ValueError(f"no walk has more than {length} frames")
+        self._windows = np.asarray(wins, dtype=np.int64)
+        self._window_static = np.asarray(static, dtype=np.int64)
+        self._window_len, self._window_warm = int(length), int(warm)
+        print(f"[PatternLoopDataset] window mode: {len(wins)} windows of {warm} warm + anchor + {length} targets",
+              flush=True)
+
+    def _get_window(self, w):
+        rows = self._windows[w]
+        anchor = self._window_warm
+        photo_rng = torch.get_rng_state() if self.share_photometric_aug else None
+        keep_layout = not (self.layout_cond and self.layout_drop_prob > 0.0
+                           and float(torch.rand(())) < self.layout_drop_prob)
+        frames, flip = [None] * len(rows), None
+        for k in [anchor] + [q for q in range(len(rows)) if q != anchor]:
+            r = int(rows[k])
+            if r < 0:
+                continue
+            fn, exp, d, ts, di = self.label.iloc[r, :].values
+            fr = self._load_frame(fn, exp, d, ts, di, force_flip=flip, apply_random_erasing=False,
+                                  photo_rng=photo_rng, layout_drop=False)
+            if flip is None:
+                flip = bool(fr["flipped"])
+            frames[k] = fr
+        tpl = frames[anchor]
+        def stack(key):
+            return torch.stack([(f[key] if f is not None else torch.zeros_like(tpl[key])) for f in frames])
+        mask = stack("condition_mask") if tpl["condition_mask"] is not None else None
+        if mask is not None and mask.shape[1] > 1 and not keep_layout:
+            mask[:, 1:] = 0.0  # the whole window runs without layouts, as a dropped-layout sample
+        afn = str(self.label.iloc[int(rows[anchor]), 0])
+        mem0 = self._memory_cache[afn].float()
+        # Static structure (grid lines, markers): the memory written by the walk's frame 0 alone.
+        static = self._memory_cache[str(self.label.iloc[int(self._window_static[w]), 0])].float()
+        out = {
+            "win_static": torch.flip(static, dims=(-1,)) if flip else static,
+            "win_image": stack("image"),
+            "win_valid": torch.tensor([1.0 if f is not None else 0.0 for f in frames]),
+            "win_hidden": stack("hidden_state"),
+            "win_direction": stack("direction"),
+            "win_DI": stack("DI"),
+            "win_info": stack("info"),
+            "win_loss_mask": stack("loss_mask"),
+            "win_mem0": torch.flip(mem0, dims=(-1,)) if flip else mem0,
+            "win_flipped": torch.tensor(1.0 if flip else 0.0),
+            "win_rows": torch.as_tensor(rows, dtype=torch.long),  # label rows, -1 before the walk start
+        }
+        if mask is not None:
+            out["win_mask"] = mask
+        return out
+
     def __getitem__(self, index):
         if self.base_size == 0:
             raise IndexError("PatternLoopDataset is empty.")
+        if getattr(self, "_windows", None) is not None:
+            return self._get_window(int(index) % len(self._windows))
         real_idx = int(index) % self.base_size
         filename, exp, direction, timestep, DI = self.label.iloc[real_idx, :].values
 
@@ -680,7 +789,18 @@ class PatternLoopDataset(Dataset):
         mask_target = target["condition_mask"] if target["condition_mask"] is not None else ones
         mask_prev = prev["condition_mask"] if prev["condition_mask"] is not None else ones
         # Unified damage / object mask for both stage forwards.
-        mask_combined = torch.max(mask_prev, mask_target)
+        mask_combined = torch.max(mask_prev[:1], mask_target[:1])
+        if mask_target.shape[0] > 1:
+            # layout_cond: the layout channel is the target frame's own (a max over SDFs would turn a
+            # dropped layout, 0, into a wrong half-layout).
+            mask_combined = torch.cat([mask_combined, mask_target[1:]], dim=0)
+            # Refiner state-track hop to frame t-1 (loss_mixin._refiner_state_track): at inference that frame
+            # was drawn with ITS OWN layout, so the hop reads frame t-1's layout, not frame t's. Dropped
+            # together with the target's (target layout 0 -> hop 0, as an inference run without layouts).
+            lay_prev = torch.zeros_like(mask_target[1:2])
+            if has_prev and bool(mask_target[1:2].abs().sum() > 0):
+                lay_prev = self._layout_tensor(p_filename, force_flip, target["image"], drop=False)
+            mask_hop = torch.cat([mask_combined[:1], lay_prev], dim=0)
 
         out = {
             "image_target": target["image"],
@@ -700,6 +820,7 @@ class PatternLoopDataset(Dataset):
             "mask_target": mask_target,
             "mask_prev": mask_prev,
             "mask_combined": mask_combined,
+            **({"mask_hop": mask_hop} if mask_target.shape[0] > 1 else {}),
             "has_prev": torch.tensor(1.0 if has_prev else 0.0, dtype=torch.float32),
             # Back-compat aliases used by pack helpers / inference anchors.
             "image": target["image"],
@@ -716,6 +837,24 @@ class PatternLoopDataset(Dataset):
             out["direction_prev2"] = prev2["direction"]
             out["DI_prev2"] = prev2["DI"]
             out["has_prev2"] = torch.tensor(1.0 if has_prev2 else 0.0, dtype=torch.float32)
+        if self._next_iloc is not None:
+            next_idx = int(self._next_iloc[real_idx])
+            nxt = target
+            if next_idx >= 0:
+                n_filename, n_exp, n_direction, n_timestep, n_DI = self.label.iloc[next_idx, :].values
+                nxt = self._load_frame(
+                    n_filename,
+                    n_exp,
+                    n_direction,
+                    n_timestep,
+                    n_DI,
+                    force_flip=force_flip,
+                    apply_random_erasing=False,
+                    photo_rng=photo_rng,
+                )
+            out["image_next"] = nxt["image"]
+            out["hidden_state_next"] = nxt["hidden_state"]
+            out["has_next"] = torch.tensor(1.0 if next_idx >= 0 else 0.0, dtype=torch.float32)
         if self._state_cache is not None:
             flipped = bool(target["flipped"])
             state_prev = (
@@ -725,10 +864,26 @@ class PatternLoopDataset(Dataset):
             )
             out["state_prev"] = state_prev
             out["state_prev2"] = self._cached_state(q_filename, flipped) if has_prev2 else state_prev
+        if self._memory_cache is not None:
+            mem = self._memory_cache[str(filename)].float()
+            out["memory_prev"] = torch.flip(mem, dims=(-1,)) if bool(target["flipped"]) else mem
+            if self.use_prev2:  # memory before frame t-1 (Resampling Forcing regenerates t-1 from t-2 with it)
+                mem2 = self._memory_cache[str(p_filename)].float() if has_prev else torch.zeros_like(mem)
+                out["memory_prev2"] = torch.flip(mem2, dims=(-1,)) if bool(target["flipped"]) else mem2
+        if self._memory_rows is not None:
+            out["memory_rows"] = self._memory_rows[str(filename)]
+            if self.use_prev2:  # rows before frame t-1: the learned memory Resampling Forcing regenerates t-1 with
+                rows2 = self._memory_rows[str(p_filename)] if has_prev else None
+                out["memory_rows_prev2"] = rows2 if rows2 is not None else torch.full_like(out["memory_rows"], -1)
+            out["flipped"] = torch.tensor(1.0 if bool(target["flipped"]) else 0.0, dtype=torch.float32)
+            if self._memory_row is not None:
+                out["memory_row"] = self._memory_row[str(filename)]
         return out
 
 
     def __len__(self):
+        if getattr(self, "_windows", None) is not None:
+            return len(self._windows) * self.virtual_repeat_factor
         return self.base_size * self.virtual_repeat_factor
 
     def get_hidden_state(self, extractor, exp_list, result_dir):

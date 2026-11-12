@@ -32,13 +32,10 @@ def to_uint8_gray(x: torch.Tensor) -> np.ndarray:
     return torch.round(x01 * 255.0).to(torch.uint8).cpu().numpy()
 
 
-def load_real_uint8(filenames, image_dir, image_size=128, use_clahe=True, clip_limit=2.0, tile=(8, 8)):
-    """Real images through the generator's deterministic preprocessing (resize, gray, CLAHE)."""
-    from PIL import Image
-
+def _generator_transform(image_size, use_clahe, clip_limit, tile):
     from src.utils import build_damage_image_transform
 
-    tf = build_damage_image_transform(
+    return build_damage_image_transform(
         image_size=image_size,
         use_augmentation=False,
         output_scale=True,
@@ -48,6 +45,28 @@ def load_real_uint8(filenames, image_dir, image_size=128, use_clahe=True, clip_l
         clahe_clip_limit=clip_limit,
         clahe_tile_grid_size=tile,
     )
+
+
+def clahe_uint8(u8, image_size=128, clip_limit=2.0, tile=(8, 8)):
+    """(N,H,W) uint8 images of a model that draws raw photos → the CLAHE'd domain of the reference set.
+
+    Same transform as load_real_uint8 (src.utils CLAHE, not cv2's, whose output differs).
+    """
+    from PIL import Image
+
+    tf = _generator_transform(image_size, True, clip_limit, tile)
+    out = np.empty((len(u8), image_size, image_size), dtype=np.uint8)
+    for i, a in enumerate(u8):
+        x = tf(Image.fromarray(np.asarray(a, dtype=np.uint8)).convert("RGB"))
+        out[i] = torch.round(torch.clamp(x[0], 0.0, 1.0) * 255.0).to(torch.uint8).numpy()
+    return out
+
+
+def load_real_uint8(filenames, image_dir, image_size=128, use_clahe=True, clip_limit=2.0, tile=(8, 8)):
+    """Real images through the generator's deterministic preprocessing (resize, gray, CLAHE)."""
+    from PIL import Image
+
+    tf = _generator_transform(image_size, use_clahe, clip_limit, tile)
     out = np.empty((len(filenames), image_size, image_size), dtype=np.uint8)
     for i, name in enumerate(filenames):
         path = os.path.join(image_dir, name)

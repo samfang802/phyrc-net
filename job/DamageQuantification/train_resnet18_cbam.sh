@@ -101,7 +101,7 @@ else
     EXTRA_ARGS+=(--no-use_mask)
 fi
 
-"${NICE_CMD[@]}" python3 -u train_resnet18_cbam.py \
+"${NICE_CMD[@]}" python3 -u -m quantification.train_resnet18_cbam \
   --lr "${LR}" \
   --epoch "${EPOCH}" \
   --batch_size "${BATCH_SIZE}" \

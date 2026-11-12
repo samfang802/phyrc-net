@@ -119,8 +119,8 @@ class CFMPatchMixin:
             raise ValueError(f"Patch Diffusion expects square inputs, got {height}x{width}")
         if z0 is not None and z0.shape != z1.shape:
             raise ValueError(f"z0 shape {tuple(z0.shape)} must match z1 {tuple(z1.shape)}")
-        if z_aux is not None and z_aux.shape != z1.shape:
-            raise ValueError(f"z_aux shape {tuple(z_aux.shape)} must match z1 {tuple(z1.shape)}")
+        if z_aux is not None and (z_aux.shape[0] != z1.shape[0] or z_aux.shape[-2:] != z1.shape[-2:]):
+            raise ValueError(f"z_aux shape {tuple(z_aux.shape)} must match z1 {tuple(z1.shape)} (channels aside)")
         full_size = int(height)
         patch_size = (
             self._sample_stochastic_patch_size(full_size, flow_t=flow_t)
@@ -318,10 +318,12 @@ class CFMPatchMixin:
             raise ValueError(
                 f"lr_cond batch {lr_cond.shape[0]} must match condition batch {batch}"
             )
-        if lr_cond.shape[1] != self.model_in_channels:
+        want = (int(self.model_in_channels) + int(getattr(self, "refiner_memory_hint_channels", 0))
+                + int(getattr(self, "refiner_conf_hint_channels", 0)))
+        if lr_cond.shape[1] != want:
             raise ValueError(
-                f"lr_cond channels {lr_cond.shape[1]} must match "
-                f"model_in_channels={self.model_in_channels}"
+                f"lr_cond channels {lr_cond.shape[1]} must be {want} "
+                f"(model_in_channels={self.model_in_channels} + refiner memory + S confidence)"
             )
         hr_h, hr_w = int(spatial_hw[0]), int(spatial_hw[1])
         if tuple(lr_cond.shape[-2:]) != (hr_h, hr_w):
@@ -431,6 +433,7 @@ class CFMPatchMixin:
         ref_feat=None,
         gru_delta=None,
         control_scale=None,
+        gru_delta_next=None,
     ):
         # v10.5: S_{t-1} (passed as lr_cond) is the ControlNet hint, not an input channel.
         control_hint = lr_cond if getattr(self, "refiner_implicit", False) else None
@@ -459,6 +462,7 @@ class CFMPatchMixin:
                 ref_feat=ref_feat,
                 **({"gru_delta": gru_delta} if gru_delta is not None else {}),
                 **({"control_hint": hint, "control_scale": scale} if hint is not None else {}),
+                **({"gru_delta_next": gru_delta_next} if hint is not None and gru_delta_next is not None else {}),
             )
 
         pred = _net(control_hint, control_scale)

@@ -16,7 +16,7 @@ Nothing in this file is a measured result unless it says so.
 
 ## 1. Why
 
-From `docs/eval/condition_g.md` and `docs/DAMAGE_STATE_ENCODER.md` (all measured):
+From `docs/eval/archive/condition_g.md` and `docs/DAMAGE_STATE_ENCODER.md` (all measured):
 
 - **g is organised by loading direction.** In the raw GRU state, the sign of the drift at the frame explains 37–46% of the variance; consecutive frames of one face (which alternate sign) have cosine −0.30. The stacked bidirectional GRU also mixes the future of the loop into every g_t (cosine 0.53–0.80 between the full-loop and truncated-loop states).
 - **g barely tells specimens apart in damage terms.** A ridge probe from g to spalling over-predicts R307 (val) by +0.23 / +0.28 at 6 / 8% drift and under-predicts CTR1 (test) by −0.15 / −0.12, and the generated damage areas err in the same directions. (Recomputed 2026-10-25 with the hand-drawn spall polygons `anylabel_r_spall.csv`; with the old `r_spall.csv` it was +0.23 / +0.31 and −0.20 / −0.21. The CTR1 under-prediction is smaller than first reported.)
@@ -132,11 +132,11 @@ Quick suite on test and val, paired against gn (its samples already exist: `resu
 | Are the new inputs used? | `train/gated_fusion_alpha`, `train/damage_alpha` | both away from 0 |
 | Face × sign | GT pattern of §3 (Push darker at negative peaks) in the samples | reproduced, unlike gn |
 
-If v11 helps, the next steps are the v10.6 refiner on top of a v11 base (state cache rebuilt; Δz instead of Δg) and the physics-based spalling indicator for CTR1 (`docs/DAMAGE_STATE_ENCODER.md`, `docs/eval/condition_g.md` §11).
+If v11 helps, the next steps are the v10.6 refiner on top of a v11 base (state cache rebuilt; Δz instead of Δg) and the physics-based spalling indicator for CTR1 (`docs/DAMAGE_STATE_ENCODER.md`, `docs/eval/archive/condition_g.md` §11).
 
 ## 9. Results (measured, eval-v1, DINOv3, K = 8)
 
-> 2026-10-29: DINOv3 metrics in this section (KID, neighbour contrast, progression ratio / corr, probe R²) are JPEG-q75 aligned (`<suite>/<split>/kid_jpeg75/`, see docs/eval/protocol.md). Texture and temporal metrics are unaffected. Numbers marked (pre-JPEG) were not re-scored.
+> 2026-10-29: DINOv3 metrics in this section (KID, neighbour contrast, progression ratio / corr, probe R²) are JPEG-q75 aligned (`<suite>/<split>/kid_jpeg75/`, see docs/eval/archive/protocol.md). Texture and temporal metrics are unaffected. Numbers marked (pre-JPEG) were not re-scored.
 
 Sources: `results/eval_suite/v11/` (v11 vs gn), `results/eval_suite/v11_refiner/` (refiner checkpoints vs v11_12k), `results/eval_suite/v106C/` (v106C_6k). Rows from different suite runs share the protocol and reference set (gn reproduces to ±0.001 KID across runs) but have no paired z between them.
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Screen a damage-state encoder against the GRU extractor before retraining any generator.
 
-Same frames and probes as scripts/eval/analyze_condition_g.py (docs/eval/condition_g.md §6-§10), on the
+Same frames and probes as scripts/eval/analyze_condition_g.py (docs/eval/archive/condition_g.md §6-§10), on the
 raw representations (z-scored per dimension): GRU g, encoder z, encoder [z, s].
   1. variance by specimen / drift level / drift sign
   2. ridge probes -> R_spall, DI (train specimens leave-one-specimen-out; R307 / CTR1 from all four)

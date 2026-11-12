@@ -3,6 +3,8 @@
 import torch
 import torch.nn.functional as F
 
+from src.model.cfm.refiner_memory import inject_memory_errors, memory_error
+
 
 class CFMLossMixin:
     def _compute_velocity_min_snr_weight(self, t):
@@ -200,6 +202,8 @@ class CFMLossMixin:
         self._attach_refiner_base()
         base = self._refiner_base_ref[0]
         c_b, g_b = base._unpack_conditions(info, hs, dr, di)
+        if mask is not None and mask.shape[1] > 1 and not getattr(base, "layout_cond", False):
+            mask = mask[:, :1]  # layout channel only for a layout-conditioned refiner
         solver = base.cfm_solver
         try:
             base.cfm_solver = "heun" if full else "euler"
@@ -211,7 +215,12 @@ class CFMLossMixin:
 
     @torch.no_grad()
     def _refiner_state_step(self, state, c, g, mask, full, gru_delta=None):
-        """State track: this network from noise, ``state`` locked, returns ``clamp(state + residual)``."""
+        """State track: this network from noise, ``state`` locked, returns ``clamp(state + residual)``.
+        With ``refiner_memory`` the hop reads an empty memory (the dropped value)."""
+        n_mem = int(getattr(self, "refiner_memory_hint_channels", 0))
+        if n_mem:
+            state = torch.cat([state, torch.zeros_like(state[:, :1]).expand(-1, n_mem, -1, -1)], dim=1)
+        state = self._refiner_conf_hint(state, float(self.refiner_state_conf_value))
         solver = self.cfm_solver
         try:
             self.cfm_solver = "heun" if full else "euler"
@@ -222,6 +231,50 @@ class CFMLossMixin:
         finally:
             self.cfm_solver = solver
 
+
+    def _refiner_memory_time_gate(self, hint, t):
+        """Zero the memory channels of ``hint`` ([S | memory | confidence]) where flow time ``t`` (float or [B])
+        is >= ``refiner_memory_tmax``."""
+        n_mem = int(getattr(self, "refiner_memory_hint_channels", 0))
+        tmax = float(getattr(self, "refiner_memory_tmax", 1.0))
+        # Sampling-time memory schedule (rfmv2): scale_early for tau < scale_t, scale_late after; also in the
+        # self-resampling hops, which stand in for sampling.
+        lo, hi = float(getattr(self, "refiner_memory_scale_early", 1.0)), float(getattr(self, "refiner_memory_scale_late", 1.0))
+        sched = (lo != 1.0 or hi != 1.0) and (not self.training or getattr(self, "_in_hop", False))
+        if n_mem <= 0 or hint is None or (tmax >= 1.0 and not sched):
+            return hint
+        b = hint.shape[0]
+        tt = torch.as_tensor(t, device=hint.device).reshape(-1).to(hint.dtype).expand(b)
+        keep = (tt < tmax).to(hint.dtype)
+        if sched:
+            t_sw = float(getattr(self, "refiner_memory_scale_t", 0.5))
+            keep = keep * torch.where(tt < t_sw, torch.full_like(tt, lo), torch.full_like(tt, hi))
+        c0 = int(self.model_in_channels)
+        mem = hint[:, c0:c0 + n_mem] * keep.view(b, 1, 1, 1)
+        return torch.cat([hint[:, :c0], mem, hint[:, c0 + n_mem:]], dim=1)
+
+    def _refiner_conf_hint(self, hint, conf, hops=None):
+        """Append the S confidence channel (``refiner_state_conf``): ``conf`` is a float or a [B] tensor.
+        With ``refiner_state_conf_hops`` a second channel: ``hops`` (float or [B]) self-generated hops behind S,
+        min(h, L) / L. Not given: 1 hop where conf < 1 (one resampling hop), 0 for a real frame."""
+        if not getattr(self, "refiner_state_conf", False):
+            return hint
+        b = hint.shape[0]
+        if not torch.is_tensor(conf):
+            conf = torch.full((b,), float(conf), device=hint.device, dtype=hint.dtype)
+        conf = conf.to(device=hint.device, dtype=hint.dtype).reshape(-1).expand(b)
+        chans = [conf]
+        if getattr(self, "refiner_state_conf_hops", False):
+            L = float(max(int(getattr(self, "refiner_window", 0)), 1))
+            if hops is None:
+                hops = (conf < 1.0).to(hint.dtype) * min(1.0, 1.0 / L)
+            elif not torch.is_tensor(hops):
+                hops = torch.full((b,), min(float(hops), L) / L, device=hint.device, dtype=hint.dtype)
+            else:
+                hops = hops.to(device=hint.device, dtype=hint.dtype).reshape(-1).expand(b).clamp(max=L) / L
+            chans.append(hops)
+        extra = torch.stack(chans, dim=1).view(b, len(chans), 1, 1)
+        return torch.cat([hint, extra.expand(-1, -1, hint.shape[-2], hint.shape[-1])], dim=1)
 
     @torch.no_grad()
     def _refiner_base_prev_state(self, ar_pack, info, mask_combined):
@@ -236,7 +289,8 @@ class CFMLossMixin:
             return None
         full = self._refiner_draw_full()
         self._last_refiner_full_rollout = float(full)
-        return self._refiner_base_sample(info, hs, dr, di, mask_combined, full)
+        mask_hop = ar_pack.get("mask_hop")
+        return self._refiner_base_sample(info, hs, dr, di, mask_combined if mask_hop is None else mask_hop, full)
 
 
     def _refiner_state_track(self, ar_pack, info, mask_combined, b, device, dtype):
@@ -255,7 +309,18 @@ class CFMLossMixin:
             return v.reshape(b).to(device=device) >= 0.5
 
         has_prev = _flag("has_prev")
+        # Frame t-1 is drawn with frame t-1's own layout (layout_cond: dataset "mask_hop"), as at inference.
+        mask_hop = ar_pack.get("mask_hop")
+        mask_hop = mask_combined if mask_hop is None else mask_hop.to(device=device)
+        if self.refiner_state_source == "gt" and ar_pack.get("image_prev") is not None:
+            # Teacher forcing ablation: the real previous photo, no state track.
+            self._last_refiner_chain = 0.0
+            s_in = self._encode_to_target_space(ar_pack["image_prev"]).to(device=device)
+            return has_prev, s_in.to(dtype=dtype)
         has_prev2 = _flag("has_prev2") & has_prev
+        if self.refiner_state_source == "resample":
+            self._last_refiner_chain = 0.0
+            return has_prev, self._refiner_resampled_prev(ar_pack, info, mask_hop, has_prev2, b, device, dtype)
         hs1, dr1, di1 = (
             ar_pack["hidden_state_prev"],
             ar_pack["direction_prev"],
@@ -268,6 +333,8 @@ class CFMLossMixin:
         self._last_refiner_chain = float(chain_ok)
         cached1 = ar_pack.get("state_prev")
         cached2 = ar_pack.get("state_prev2")
+        if self.training and self.refiner_state_cache and cached1 is None:
+            raise RuntimeError("--refiner_state_cache is on but the train batch has no state_prev")
 
         with torch.no_grad():
             if chain_ok:
@@ -288,16 +355,301 @@ class CFMLossMixin:
                 if self.use_delta_g:
                     dg_hop = g1 - self.process_physics_condition(hs0)
                 s1 = self._refiner_state_step(
-                    s0, c1, g1, mask_combined, self._refiner_draw_full(), gru_delta=dg_hop
+                    s0, c1, g1, mask_hop, self._refiner_draw_full(), gru_delta=dg_hop
                 )
                 s_in = torch.where(has_prev2.view(b, 1, 1, 1), s1, s0)
             elif cached1 is not None:
                 s_in = cached1.to(device=device)
             else:
                 s_in = self._refiner_base_sample(
-                    info, hs1, dr1, di1, mask_combined, self._refiner_draw_full()
+                    info, hs1, dr1, di1, mask_hop, self._refiner_draw_full()
                 )
         return has_prev, s_in.to(dtype=dtype)
+
+
+    @torch.no_grad()
+    def _refiner_resampled_prev(self, ar_pack, info, mask_hop, has_prev2, b, device, dtype):
+        """Resampling Forcing (arXiv 2512.15702): the real frame t-1 noised to ``t_s`` and integrated
+        back to t = 1 by this network (no grad), reading the real frame t-2 as its own S, so the state
+        carries the model's own error at a strength set by ``t_s`` (t_s -> 1: teacher forcing, t_s -> 0:
+        a fresh draw of frame t-1). One ``t_s = sigmoid(N(mu, sigma))`` per batch. Rows without a frame
+        t-2, and every row before ``refiner_resample_warmup`` steps, keep the real frame t-1; after the
+        warm-up the resampled share of the rest ramps linearly from 0 to 1 over ``refiner_resample_ramp``
+        steps (per sample). Sets ``_refiner_state_conf_rows`` (t_s if resampled, else 1)."""
+        x_prev = self._encode_to_target_space(ar_pack["image_prev"]).to(device=device, dtype=dtype)
+        step = int(self.global_step) if getattr(self, "_trainer", None) is not None else 0
+        self._refiner_state_conf_rows = torch.ones(b, device=device, dtype=dtype)
+        warm = int(self.refiner_resample_warmup)
+        ramp = int(self.refiner_resample_ramp)
+        p = 1.0 if (ramp <= 0 or not self.training) else min(1.0, max(0.0, (step - warm) / ramp))
+        rows = has_prev2 & (torch.rand(b, device=device) < p)
+        if step < warm or not bool(rows.any()):
+            self._last_refiner_resample_t = 1.0
+            self._last_refiner_resample_frac = 0.0
+            return x_prev
+        u = float(self.refiner_resample_mu) + float(self.refiner_resample_sigma) * float(torch.randn(()))
+        t_s = min(float(torch.sigmoid(torch.tensor(u))), 0.95)
+        self._last_refiner_resample_t = t_s
+        self._last_refiner_resample_frac = float(rows.float().mean())
+        x_prev2 = self._encode_to_target_space(ar_pack["image_prev2"]).to(device=device, dtype=dtype)
+        c1, g1 = self._unpack_conditions(
+            info, ar_pack["hidden_state_prev"], ar_pack["direction_prev"], ar_pack["DI_prev"]
+        )
+        dg = None
+        if self.use_delta_g:
+            dg = g1 - self.process_physics_condition(ar_pack["hidden_state_prev2"])
+        hint2 = x_prev2
+        if getattr(self, "refiner_memory", False):
+            # The regenerated frame t-1 reads the real memory before t-1 (M_{t-2}), as the sampler would.
+            if getattr(self, "refiner_memory_recycle", False):
+                raise ValueError("refiner_memory with resample does not support recycle")
+            if self.refiner_memory_encoder:
+                # Learned memory: E over the writing frames before t-1 (no grad: the hop is not trained).
+                if ar_pack.get("memory_rows_prev2") is None:
+                    raise KeyError("refiner_memory_encoder + resample needs memory_rows_prev2 (use_prev2 + memory rows)")
+                with torch.no_grad():
+                    mem2 = self._refiner_learned_memory_hint(ar_pack, b, device, dtype, "memory_rows_prev2", drop=False)
+            else:
+                mem2 = ar_pack.get("memory_prev2")
+            if mem2 is None:
+                raise KeyError("refiner_memory + resample needs memory_prev2 in the batch (use_prev2 + memory cache)")
+            hint2 = torch.cat([x_prev2, mem2.to(device=device, dtype=dtype)], dim=1)
+        eps = self._refiner_start_noise(None, b, device).to(dtype)
+        z_init = (1.0 - t_s) * eps + t_s * x_prev
+        solver = self.cfm_solver
+        try:
+            self.cfm_solver = "euler"
+            s1 = self.sample_with_ode(
+                c1, z0=eps, z_init=z_init, t_start=t_s, num_steps=int(self.refiner_resample_steps),
+                gru_feat=g1, damage_mask=mask_hop, lr_cond=self._refiner_conf_hint(hint2, 1.0), gru_delta=dg,
+            )
+        finally:
+            self.cfm_solver = solver
+        self._refiner_state_conf_rows = torch.where(rows, torch.full_like(self._refiner_state_conf_rows, t_s),
+                                                    self._refiner_state_conf_rows)
+        return torch.where(rows.view(b, 1, 1, 1), s1.to(dtype), x_prev)
+
+
+    def _refiner_memory_hint(self, ar_pack, b, device, dtype):
+        """The real frames' structure memory before the target (dataset ``memory_prev``); zeroed per
+        sample with ``refiner_memory_drop_prob`` in training."""
+        mem = ar_pack.get("memory_prev")
+        if mem is None:
+            raise KeyError("refiner_memory needs memory_prev in the batch (dataset.attach_memory_cache)")
+        mem = mem.to(device=device, dtype=dtype)
+        if self._refiner_memory_recycle_on():
+            mem = self._refiner_memory_recycle(mem, ar_pack, b, device)
+        return self._refiner_memory_drop(mem, b, device, dtype)
+
+    def _refiner_memory_recycle_on(self):
+        """Training with ``refiner_memory_recycle`` from step ``refiner_memory_recycle_start`` on (real memory
+        before it, as a teacher-forcing warm-up); both banking and injection."""
+        if not (self.training and getattr(self, "refiner_memory_recycle", False)):
+            return False
+        step = int(self.global_step) if getattr(self, "_trainer", None) is not None else 0
+        return step >= int(self.refiner_memory_recycle_start)
+
+    def attach_memory_error_bank(self, n_rows):
+        """One empty slot per global frame row for the recycled structure errors (``refiner_memory_recycle``)."""
+        size = int(self.model_spatial_size)
+        self._memory_err = torch.zeros(int(n_rows), 1, size, size, dtype=torch.float16)
+        self._memory_err_ok = torch.zeros(int(n_rows), dtype=torch.bool)
+
+    def _memory_err_bank(self, device):
+        if self._memory_err is None:
+            raise RuntimeError("refiner_memory_recycle needs attach_memory_error_bank")
+        if self._memory_err.device != device:
+            self._memory_err = self._memory_err.to(device)
+            self._memory_err_ok = self._memory_err_ok.to(device)
+        return self._memory_err, self._memory_err_ok
+
+    @torch.no_grad()
+    def _refiner_memory_recycle(self, mem, ar_pack, b, device):
+        """Corrupt the real memory with banked errors: a ``refiner_memory_recycle_clean`` share stays clean, the
+        rest takes 1..n errors from the earlier frames of its own walk or (share ``_transplant``) from any banked
+        frame, flipped with the sample (transplants: at random)."""
+        bank, ok = self._memory_err_bank(device)
+        rows = ar_pack.get("memory_rows")
+        flipped = ar_pack.get("flipped")
+        if rows is None or flipped is None:
+            raise KeyError("refiner_memory_recycle needs memory_rows / flipped in the batch (dataset.attach_memory_rows)")
+        n = int(self.refiner_memory_recycle_n)
+        filled = torch.nonzero(ok).flatten()
+        corrupt = torch.rand(b, device=device) >= float(self.refiner_memory_recycle_clean)
+        if filled.numel() == 0 or not bool(corrupt.any()):
+            self._last_memory_recycle_frac = 0.0
+            return mem
+        transplant = torch.rand(b, device=device) < float(self.refiner_memory_recycle_transplant)
+        k = torch.randint(1, n + 1, (b,), device=device)
+        slot = torch.arange(n, device=device).view(1, n) < k.view(b, 1)
+        # Own walk: up to n random earlier rows that are banked.
+        rows = rows.to(device)
+        own_ok = (rows >= 0) & ok[rows.clamp(min=0)]
+        score = torch.where(own_ok, torch.rand(rows.shape, device=device), torch.full(rows.shape, -1.0, device=device))
+        top = score.topk(min(n, rows.shape[1]), dim=1)
+        own = torch.full((b, n), -1, dtype=torch.long, device=device)
+        own[:, : top.indices.shape[1]] = torch.where(top.values >= 0, rows.gather(1, top.indices), torch.full_like(top.indices, -1))
+        other = filled[torch.randint(0, filled.numel(), (b, n), device=device)]
+        pick = torch.where(transplant.view(b, 1), other, own)
+        valid = slot & (pick >= 0) & corrupt.view(b, 1)
+        errs = bank[pick.clamp(min=0)].float().squeeze(2)
+        flip = torch.where(transplant, torch.rand(b, device=device) < 0.5, flipped.to(device).reshape(b) >= 0.5)
+        errs = torch.where(flip.view(b, 1, 1, 1), torch.flip(errs, dims=(-1,)), errs)
+        self._last_memory_recycle_frac = float(valid.any(dim=1).float().mean())
+        return inject_memory_errors(mem.float(), errs, valid).to(mem.dtype)
+
+    @torch.no_grad()
+    def _refiner_memory_bank(self, ar_pack, zt, t, v_pred, x1):
+        """Bank this step's structure errors (x̂1 against the real frame, full-frame crops with flow time >=
+        ``refiner_memory_recycle_tmin``) at the frames' own rows, unflipped."""
+        size = int(self.model_spatial_size)
+        row = ar_pack.get("memory_row")
+        if row is None:
+            raise KeyError("refiner_memory_recycle needs memory_row in the batch (attach_memory_rows with row_of)")
+        if x1.shape[-1] != size or x1.shape[-2] != size:
+            return
+        keep = t >= float(self.refiner_memory_recycle_tmin)
+        if not bool(keep.any()):
+            return
+        bank, ok = self._memory_err_bank(x1.device)
+        x_hat = self._estimate_clean_from_velocity(zt, t, v_pred)
+        err = memory_error(x_hat[keep], x1[keep], self.refiner_memory_sigma, self.refiner_memory_tau)
+        flip = ar_pack["flipped"].to(x1.device).reshape(-1)[keep] >= 0.5
+        err = torch.where(flip.view(-1, 1, 1, 1), torch.flip(err, dims=(-1,)), err)
+        rows = row.to(x1.device).reshape(-1)[keep]
+        bank[rows] = err.to(bank.dtype)
+        ok[rows] = True
+        self._last_memory_bank_fill = float(ok.float().mean())
+
+    def _refiner_memory_drop(self, mem, b, device, dtype):
+        if self.training and float(self.refiner_memory_drop_prob) > 0.0:
+            keep = torch.rand(b, device=device) >= float(self.refiner_memory_drop_prob)
+            mem = mem * keep.to(dtype).view(b, 1, 1, 1)
+        return mem
+
+    @torch.no_grad()
+    def _refiner_erase_cracks(self, S, M, f_tgt, static, mem_keep, eps=0.03, sigma=3.0, grid=8):
+        """Ring Forcing (arXiv 2608.26794) appear-disappear-reappear for a fixed camera and monotone damage: in a
+        ``refiner_erase_prob`` share of the rows whose memory is not dropped, the damage cracks held by both the
+        memory ``M`` and the target (``f_tgt``, its structure map), minus frame 0's static structure, are erased
+        from ``S`` inside random cells of a ``grid`` x ``grid`` partition (each kept with a per-row rate
+        U[0.5, 1]), dilated 2 px, and filled from the unmasked surroundings (normalised Gaussian convolution).
+        The target is unchanged, so only the memory can supply the erased cracks."""
+        from src.model.cfm.refiner_memory import _gauss_1d
+
+        Bt, C, H, W = S.shape
+        dev = S.device
+        not_static = F.max_pool2d((static < -eps).float(), 5, stride=1, padding=2) <= 0
+        cand = (M.float() < -eps) & (f_tgt.float() < -eps) & not_static
+        rows = mem_keep & (torch.rand(Bt, device=dev) < float(self.refiner_erase_prob))
+        rate = 0.5 + 0.5 * torch.rand(Bt, 1, 1, 1, device=dev)
+        cells = F.interpolate((torch.rand(Bt, 1, grid, grid, device=dev) < rate).float(), size=(H, W), mode="nearest")
+        m = cand.float() * cells * rows.float().view(Bt, 1, 1, 1)
+        m = F.max_pool2d(m, 5, stride=1, padding=2)
+        self._last_erase_frac = float(rows.float().mean())
+        self._last_erase_px = float(m.mean())
+        if not bool((m > 0).any()):
+            return S
+        k, r = _gauss_1d(sigma, dev, torch.float32)
+
+        def blur(x):
+            n = x.shape[1]
+            y = x.reshape(-1, 1, H, W)
+            y = F.conv2d(F.pad(y, (r, r, 0, 0), mode="reflect"), k.view(1, 1, 1, -1))
+            y = F.conv2d(F.pad(y, (0, 0, r, r), mode="reflect"), k.view(1, 1, -1, 1))
+            return y.reshape(Bt, n, H, W)
+
+        s = S.float()
+        w = 1.0 - m
+        den = blur(w)
+        fill = torch.where(den > 1e-3, blur(s * w) / den.clamp(min=1e-3), blur(s))
+        return (s * w + fill * m).to(S.dtype)
+
+    @torch.no_grad()
+    def _refiner_bank_paste(self, S, M, rows, flip, mem_keep):
+        """rfmv2b (src/model/cfm/rollout_bank.py): in a ``refiner_erase_prob`` share of the targets, S gets the
+        model's own rollout degradation of its frame (delta against the real frame) inside random feathered cells;
+        in a ``refiner_bank_mem_err_prob`` share of the targets whose memory is kept, the memory gets the same
+        rollout's structure error (spurious entries added, missed ones removed). Flipped with the window."""
+        from src.model.cfm.rollout_bank import feathered_cells
+
+        Bt, _C, H, W = S.shape
+        dev = S.device
+        delta, err, ok = self._rollout_bank.sample(rows, dev)
+        delta = torch.where(flip.view(Bt, 1, 1, 1), torch.flip(delta, dims=(-1,)), delta)
+        err = torch.where(flip.view(Bt, 1, 1, 1), torch.flip(err, dims=(-1,)), err)
+        paste = ok & (torch.rand(Bt, device=dev) < float(self.refiner_erase_prob))
+        m = feathered_cells(Bt, H, W, int(self.refiner_bank_grid), self.refiner_bank_rate[0],
+                            self.refiner_bank_rate[1], float(self.refiner_bank_feather), dev)
+        m = m * paste.float().view(Bt, 1, 1, 1)
+        S = (S.float() + m * delta).to(S.dtype)
+        inj = ok & mem_keep & (torch.rand(Bt, device=dev) < float(self.refiner_bank_mem_err_prob))
+        if bool(inj.any()):
+            M = inject_memory_errors(M.float(), err, inj.view(Bt, 1)).to(M.dtype)
+        self._last_bank_paste_frac = float(paste.float().mean())
+        self._last_bank_paste_px = float(m.mean())
+        self._last_bank_err_frac = float(inj.float().mean())
+        return S, M
+
+    def attach_memory_frames(self, frames):
+        """Real frames [N, C, H, W] (train then val rows) that the learned memory encoder reads."""
+        self._memory_frames = frames
+
+    def _refiner_learned_memory_hint(self, ar_pack, b, device, dtype, rows_key="memory_rows", drop=True):
+        """``max over the sample's earlier writing frames of E(frame)`` (0 if none), flipped with the sample,
+        at the model resolution. Gradient reaches E through the max. ``rows_key="memory_rows_prev2"``: the
+        memory before frame t-1 (Resampling Forcing hop), without the per-sample drop."""
+        rows, flipped = ar_pack.get(rows_key), ar_pack.get("flipped")
+        if rows is None or flipped is None or self._memory_frames is None:
+            raise KeyError("refiner_memory_encoder needs memory_rows / flipped in the batch and attach_memory_frames")
+        if self._memory_frames.device != device:
+            self._memory_frames = self._memory_frames.to(device)
+        rows = rows.to(device)
+        valid = rows >= 0
+        size = int(self.model_spatial_size)
+        side = (size + 3) // 4
+        field = torch.zeros(b, self.refiner_memory_channels, side, side, device=device, dtype=torch.float32)
+        aux = self.training and drop and float(self.refiner_memory_aux_weight) > 0.0
+        sparse_w = float(getattr(self, "refiner_memory_sparse_weight", 0.0)) if (self.training and drop) else 0.0
+        if rows_key == "memory_rows":
+            self._refiner_memory_aux_term = None
+        if bool(valid.any()):
+            uniq, inv = torch.unique(rows[valid], return_inverse=True)
+            inputs = self._memory_frames[uniq]
+            x = inputs.float()
+            a = float(getattr(self, "refiner_memory_contrast_aug", 1.0))
+            if self.training and a < 1.0:
+                # Fogged (contrast-compressed) generated frames write weaker inputs; the target stays unaugmented.
+                x = x * (a + (1.0 - a) * torch.rand(x.shape[0], 1, 1, 1, device=device))
+            e = self.memory_encoder(x)
+            owner = torch.arange(b, device=device).view(b, 1).expand_as(rows)[valid]
+            maxed, targets = [], []
+            for i in range(b):
+                pick = inv[owner == i]
+                maxed.append(e[pick].amax(dim=0) if pick.numel() else torch.zeros_like(e[0]))
+                if aux:
+                    targets.append(self.memory_encoder.aux_target(inputs[pick]) if pick.numel()
+                                   else torch.zeros(inputs.shape[1:], device=device))
+            field = torch.stack(maxed)
+            if drop:
+                self._last_memory_field_mean = float(field.detach().mean())
+            term = None
+            if aux:
+                # Unflipped field vs the unflipped bank: the decoder must place the accumulated thin structure.
+                loss_aux, parts = self.memory_encoder.aux_loss_value(field, torch.stack(targets))
+                self._last_memory_aux_loss = float(loss_aux.detach())
+                self._last_memory_aux_parts = parts
+                term = float(self.refiner_memory_aux_weight) * loss_aux
+            if sparse_w > 0.0:
+                sp = e.mean()  # E >= 0: L1 on every written frame's output
+                self._last_memory_sparse = float(sp.detach())
+                term = sparse_w * sp if term is None else term + sparse_w * sp
+            if term is not None:
+                self._refiner_memory_aux_term = term
+        flip = flipped.to(device).reshape(b) >= 0.5
+        field = torch.where(flip.view(b, 1, 1, 1), torch.flip(field, dims=(-1,)), field)
+        mem = self.memory_encoder.hint(field, size).to(dtype)
+        return self._refiner_memory_drop(mem, b, device, dtype) if drop else mem
 
 
     def _refiner_state_condition(self, s_in):
@@ -350,6 +702,295 @@ class CFMLossMixin:
         return F.avg_pool2d(x.mean(dim=1, keepdim=True), kernel_size=k, stride=k)
 
 
+    @staticmethod
+    def _refiner_neighbor_pack(prev, k_prev, nxt, k_next):
+        """Control hint [prev | next | k_prev | k_next]; k is a float or a [B] tensor."""
+        b, _, h, w = prev.shape
+
+        def plane(k):
+            k = torch.as_tensor(k, device=prev.device, dtype=prev.dtype)
+            return k.reshape(-1, 1, 1, 1).expand(b, 1, h, w)
+
+        return torch.cat([prev, nxt, plane(k_prev), plane(k_next)], dim=1)
+
+    def _refiner_neighbor_hint(self, ar_pack, z0, t):
+        """Neighbors of the target at their own noise levels, ``(1-k) ε + k x`` (Diffusion Forcing).
+        Per sample: both at the target level τ (tied), one random neighbor at τ + U(0, ahead_max) and
+        the other at τ (ahead, what the sweep sampler shows), or each k ~ U(0, 1). Each neighbor is then
+        dropped (k = 0) with ``refiner_nbr_drop_prob``, and always where it does not exist. ε shares
+        the target's low band with ``refiner_shared_lowfreq_noise``, as all frames do at sampling."""
+        b = z0.shape[0]
+        device, dtype = z0.device, z0.dtype
+
+        def exists(key):
+            v = ar_pack.get(key)
+            if v is None:
+                return torch.zeros(b, dtype=torch.bool, device=device)
+            return v.reshape(b).to(device) >= 0.5
+
+        u = torch.rand(b, device=device)
+        p_tied = float(self.refiner_nbr_tied_prob)
+        tied = u < p_tied
+        ahead = (u >= p_tied) & (u < p_tied + float(self.refiner_nbr_ahead_prob))
+        lead = (t + float(self.refiner_nbr_ahead_max) * torch.rand(b, device=device, dtype=dtype)).clamp(max=1.0)
+        prev_leads = torch.rand(b, device=device) < 0.5
+        k_prev = torch.rand(b, device=device, dtype=dtype)
+        k_next = torch.rand(b, device=device, dtype=dtype)
+        k_prev = torch.where(tied | (ahead & ~prev_leads), t, k_prev)
+        k_next = torch.where(tied | (ahead & prev_leads), t, k_next)
+        k_prev = torch.where(ahead & prev_leads, lead, k_prev)
+        k_next = torch.where(ahead & ~prev_leads, lead, k_next)
+        drop = float(self.refiner_nbr_drop_prob) if self.training else 0.0
+        keep_prev = exists("has_prev") & (torch.rand(b, device=device) >= drop)
+        keep_next = exists("has_next") & (torch.rand(b, device=device) >= drop)
+        k_prev = k_prev * keep_prev.to(dtype)
+        k_next = k_next * keep_next.to(dtype)
+
+        shared = z0 if self.refiner_shared_lowfreq_noise else None
+
+        def noised(key, k):
+            x = self._encode_to_target_space(ar_pack[key].to(device))
+            k_ = k.view(b, 1, 1, 1)
+            return (1.0 - k_) * self._refiner_start_noise(shared, b, device).to(dtype) + k_ * x
+
+        return self._refiner_neighbor_pack(
+            noised("image_prev", k_prev), k_prev, noised("image_next", k_next), k_next
+        )
+
+    # ------------------------------------------------------------------------------------------------------
+    # rfmv2 (docs/RFMV2_ARCHITECTURE.md): window training with autoregressive self-resampling, the memory
+    # written from the resampled frames, and no loss on keeping history the real walk does not have.
+    # ------------------------------------------------------------------------------------------------------
+    def _refiner_cfm_core(self, x1, s_cond, c, g, valid_mask, mask, dg):
+        """The CFM loss of refiner_implicit_flow_matching_loss (target_x1, every row weighted 1) on a ready hint;
+        training memory gain instead of the time gate."""
+        b, device, dtype = x1.shape[0], x1.device, x1.dtype
+        z0 = torch.randn_like(x1)
+        t = torch.rand(b, device=device, dtype=dtype).clamp(min=1e-5, max=1.0 - 1e-5)
+        coords = None
+        if self.use_patch_diffusion:
+            x1, valid_mask, coords, mask, z0, s_cond = self._apply_patch_crop(
+                x1, valid_mask=valid_mask, condition_mask=mask, z0=z0, z_aux=s_cond, flow_t=t)
+        t_ = t.view(b, 1, 1, 1)
+        zt = (1.0 - t_) * z0 + t_ * x1
+        if self.refiner_memory and self.refiner_memory_gain and self.training:
+            # alpha ~ U[0, 1] with probability 0.25 + 0.5 tau, else 1: every tau sees full, weak and no memory.
+            use = torch.rand(b, device=device) < (0.25 + 0.5 * t)
+            alpha = torch.where(use, torch.rand(b, device=device, dtype=dtype), torch.ones_like(t))
+            c0, nm = int(self.model_in_channels), int(self.refiner_memory_hint_channels)
+            s_cond = torch.cat([s_cond[:, :c0], s_cond[:, c0:c0 + nm] * alpha.view(b, 1, 1, 1), s_cond[:, c0 + nm:]], 1)
+        v_pred = self._predict_velocity(zt, t, c, coords=coords, damage_mask=mask, gru_feat=g, lr_cond=s_cond,
+                                        gru_delta=dg)
+        per = self._cfm_mse(v_pred, x1 - z0, valid_mask=valid_mask)
+        if self.use_velocity_min_snr_weighting:
+            per = per * self._compute_velocity_min_snr_weight(t).to(per.dtype)
+        loss = per.mean()
+        self._last_fm_loss = float(loss.detach())
+        tone_w = float(self.refiner_tone_loss_weight)
+        if tone_w > 0.0:
+            x1_hat = self._estimate_clean_from_velocity(zt, t, v_pred)
+            block = int(self.refiner_lowfreq_block)
+            diff = (self._lowpass_tone(x1_hat, block) - self._lowpass_tone(x1, block)).pow(2)
+            tone = (diff.mean(dim=(1, 2, 3)) * t).mean()
+            self._last_refiner_tone_loss = float(tone.detach())
+            loss = loss + tone_w * tone
+        topo_w = float(getattr(self, "refiner_topo_loss_weight", 0.0))
+        if topo_w > 0.0:
+            # Crack-map recall / precision on the clean estimate (t > 0.6): soft black-hat of x1_hat (5x5 grey
+            # closing, as damage_texture.crack_map) against the target's hard crack map; pixels the false-memory
+            # mask down-weights (valid < 0.5) are left out.
+            x1_hat = self._estimate_clean_from_velocity(zt, t, v_pred).float()
+            thr, temp = 12.0 / 127.5, 0.02
+
+            def blackhat(x):
+                g = x.mean(dim=1, keepdim=True)
+                close = -F.max_pool2d(-F.max_pool2d(g, 5, stride=1, padding=2), 5, stride=1, padding=2)
+                return close - g
+
+            ok = (valid_mask.float() > 0.5).float() if valid_mask is not None else torch.ones_like(x1[:, :1]).float()
+            if ok.shape[1] != 1:
+                ok = ok[:, :1]
+            real = (blackhat(x1.float()) > thr).float() * ok
+            p = torch.sigmoid((blackhat(x1_hat) - thr) / temp) * ok
+            near = F.max_pool2d(real, 5, stride=1, padding=2)
+            rec = 1.0 - (p * real).sum(dim=(1, 2, 3)) / real.sum(dim=(1, 2, 3)).clamp(min=1.0)
+            prec = (p * (1.0 - near)).sum(dim=(1, 2, 3)) / p.sum(dim=(1, 2, 3)).clamp(min=1.0)
+            sel = (t > 0.6).float() * (real.sum(dim=(1, 2, 3)) > 0).float()
+            topo = ((rec + prec) * sel).sum() / sel.sum().clamp(min=1.0)
+            self._last_refiner_topo_loss = float(topo.detach())
+            loss = loss + topo_w * topo
+        return loss
+
+    def refiner_window_loss(self, batch):
+        """One batch of rfmv2 windows (dataset.enable_window): [warm real frames | anchor | L targets].
+
+        No grad: the anchor and the L-1 frames after it are resampled in order (each real frame noised to the
+        batch t_s and integrated back reading the previous resampled frame and the memory written so far); the
+        memory is the rule track continued over the resampled frames, a second track over the real frames gives
+        the real memory. Then target j reads S = resampled frame j-1, that memory, confidence (t_s, hops), and the
+        CFM loss on target j is weighted refiner_false_mem_weight where the history memory holds structure the
+        real memory up to target j (or target j itself) lacks."""
+        from src.model.cfm.refiner_memory import memory_feature
+
+        img = batch["win_image"]
+        B, F_ = img.shape[:2]
+        L = int(self.refiner_window)
+        a = F_ - L - 1
+        device = img.device
+        valid = batch["win_valid"].to(device) > 0.5
+        flat = lambda x: x.reshape(B * F_, *x.shape[2:])
+        X = self._encode_to_target_space(flat(img).to(device))
+        dtype = X.dtype
+        X = X.view(B, F_, *X.shape[1:])
+        c, g = self._unpack_conditions(flat(batch["win_info"]).to(device), flat(batch["win_hidden"]).to(device),
+                                       flat(batch["win_direction"]).to(device), flat(batch["win_DI"]).to(device))
+        c = c.view(B, F_, *c.shape[1:])
+        g = None if g is None else g.view(B, F_, *g.shape[1:])
+        lmask = self._align_spatial_to_target(flat(batch["win_loss_mask"]).to(device))
+        lmask = lmask.view(B, F_, *lmask.shape[1:])
+        cmask = None
+        if batch.get("win_mask") is not None:
+            cmask = self._align_spatial_to_target(flat(batch["win_mask"]).to(device).to(dtype))
+            cmask = cmask.view(B, F_, *cmask.shape[1:])
+
+        def mask_at(q):  # frame q given frame q-1: [max(object q-1, q) | layout q]
+            if cmask is None:
+                return None
+            m = cmask[:, q]
+            obj = torch.maximum(cmask[:, q - 1, :1], m[:, :1]) if q > 0 else m[:, :1]
+            return torch.cat([obj, m[:, 1:]], dim=1)
+
+        def dg_at(q):
+            if not self.use_delta_g or g is None:
+                return None
+            ok = valid[:, q - 1].view(B, *([1] * (g.dim() - 2))).to(g.dtype)
+            return (g[:, q] - g[:, q - 1]) * ok
+
+        # --- rule memory tracks (MemoryTrack semantics, per-row valid history) ---
+        sig, tau, win = float(self.refiner_memory_sigma), float(self.refiner_memory_tau), int(self.refiner_memory_window)
+        eps = 0.03
+        nan = torch.tensor(float("nan"), device=device)
+
+        def feat(x, ok=None):
+            f = memory_feature(x, sig, tau).float()
+            return f if ok is None else torch.where(ok.view(B, 1, 1, 1), f, nan)
+
+        def write(recent):
+            return torch.nanmedian(torch.stack(recent[-win:]), dim=0).values
+
+        recent0 = [feat(X[:, q], valid[:, q]) for q in range(a)]
+        mem0 = batch["win_mem0"].to(device).float()
+        v_hist, r_hist = mem0, list(recent0)
+        v_real, r_real = mem0.clone(), list(recent0)
+
+        # --- self-resampling decision (teacher-forcing warm-up, then the resampled share ramps up) ---
+        step = int(self.global_step) if getattr(self, "_trainer", None) is not None else 0
+        warm, ramp = int(self.refiner_resample_warmup), int(self.refiner_resample_ramp)
+        p = 1.0 if ramp <= 0 else min(1.0, max(0.0, (step - warm) / ramp))
+        p = min(p, float(getattr(self, "refiner_resample_max_p", 1.0)))
+        rs = (torch.rand(B, device=device) < p) if step >= warm else torch.zeros(B, dtype=torch.bool, device=device)
+        n_grp = min(int(getattr(self, "refiner_resample_groups", 1)), B)
+        grp = torch.arange(B, device=device) % n_grp  # window -> t_s group
+        u = float(self.refiner_resample_mu) + float(self.refiner_resample_sigma) * torch.randn(n_grp)
+        ts_grp = [min(float(v), 0.95) for v in torch.sigmoid(u)]
+        ts_row = torch.tensor(ts_grp, device=device)[grp]  # [B] t_s of each window
+        t_s = float(ts_row.mean())
+
+        S_list, M_list, conf_list, hop_list, w_list, F_list = [], [], [], [], [], []
+        prev = X[:, a - 1] if a > 0 else X[:, a]
+        prev_hops = torch.zeros(B, device=device)  # hops behind prev (0 = real frame)
+        n_false = n_hist = 0.0
+        solver = self.cfm_solver
+        with torch.no_grad():
+            for j in range(L):
+                q = a + j
+                prev_ok = valid[:, q - 1] if q > 0 else torch.zeros(B, dtype=torch.bool, device=device)
+                hop_rows = rs & (prev_ok if j == 0 else torch.ones_like(rs))
+                xq = X[:, q]
+                xh = xq
+                if bool(hop_rows.any()):
+                    conf_in = torch.where(prev_hops > 0, ts_row.to(prev_hops.dtype), torch.ones_like(prev_hops))
+                    hint = self._refiner_conf_hint(torch.cat([prev, v_hist.to(dtype)], dim=1), conf_in, hops=prev_hops)
+                    epsn = self._refiner_start_noise(None, B, device).to(dtype)
+                    out = xq.clone()
+                    sub = lambda v, r: None if v is None else v[r]
+                    try:
+                        self.cfm_solver, self._in_hop = self.refiner_resample_solver, True
+                        for gi, tg in enumerate(ts_grp):
+                            r = torch.nonzero(hop_rows & (grp == gi)).flatten()
+                            if r.numel() == 0:
+                                continue
+                            out[r] = self.sample_with_ode(
+                                c[r, q], z0=epsn[r], z_init=(1.0 - tg) * epsn[r] + tg * xq[r], t_start=tg,
+                                num_steps=int(self.refiner_resample_steps),
+                                gru_feat=None if g is None else g[r, q], damage_mask=sub(mask_at(q), r),
+                                lr_cond=hint[r], gru_delta=sub(dg_at(q), r)).to(dtype)
+                    finally:
+                        self.cfm_solver, self._in_hop = solver, False
+                    xh = torch.where(hop_rows.view(B, 1, 1, 1), out, xq)
+                hops = torch.where(hop_rows, prev_hops + 1, torch.zeros_like(prev_hops))
+                # memory after frame q: history track from the resampled frame, real track from the real frame
+                r_hist.append(feat(xh))
+                v_hist = torch.minimum(v_hist, write(r_hist))
+                r_real.append(feat(xq))
+                v_real = torch.minimum(v_real, write(r_real))
+                # real memory including target q+1 (and target q+1's own structure): what may be kept
+                f_next = feat(X[:, q + 1])
+                v_real_next = torch.minimum(v_real, write(r_real + [f_next]))
+                allowed = (v_real_next < -eps) | (f_next < -eps)
+                allowed = F.max_pool2d(allowed.float(), 5, stride=1, padding=2) > 0
+                false_mem = (v_hist < -eps) & ~allowed
+                n_false += float(false_mem.float().sum())
+                n_hist += float((v_hist < -eps).float().sum())
+                lam = float(self.refiner_false_mem_weight)
+                w_list.append(lmask[:, q + 1] * (1.0 - (1.0 - lam) * false_mem.to(dtype)))
+                S_list.append(xh)
+                M_list.append(v_hist.to(dtype))
+                F_list.append(f_next)
+                conf_list.append(torch.where(hops > 0, ts_row.to(hops.dtype), torch.ones_like(hops)))
+                hop_list.append(hops)
+                prev, prev_hops = xh, hops
+
+        Bt = B * L
+        stackT = lambda lst: torch.stack(lst, dim=1).reshape(Bt, *lst[0].shape[1:])
+        tgt = slice(a + 1, a + L + 1)
+        x1 = X[:, tgt].reshape(Bt, *X.shape[2:])
+        c_t = c[:, tgt].reshape(Bt, *c.shape[2:])
+        g_t = None if g is None else g[:, tgt].reshape(Bt, *g.shape[2:])
+        dg_t = None if dg_at(a + 1) is None else torch.stack([dg_at(q) for q in range(a + 1, a + L + 1)], 1).reshape(
+            Bt, *g.shape[2:])
+        m_t = None if cmask is None else torch.stack([mask_at(q) for q in range(a + 1, a + L + 1)], 1).reshape(
+            Bt, -1, *cmask.shape[-2:])
+        S, M = stackT(S_list), stackT(M_list)
+        mem_keep = torch.ones(Bt, dtype=torch.bool, device=device)
+        if float(self.refiner_memory_drop_prob) > 0.0:
+            mem_keep = torch.rand(Bt, device=device) >= float(self.refiner_memory_drop_prob)
+            M = M * mem_keep.to(dtype).view(Bt, 1, 1, 1)
+        if self.refiner_erase_source == "bank":
+            bank = self._rollout_bank
+            self._last_bank_paste_frac = self._last_bank_paste_px = self._last_bank_err_frac = 0.0
+            if bank is not None and bank.ready():
+                rows = batch.get("win_rows")
+                if rows is None:
+                    raise KeyError("refiner_erase_source=bank needs win_rows in the window batch")
+                rows = rows[:, a:a + L].reshape(Bt).to(device)  # S of target q+1 is frame q
+                flip = (batch["win_flipped"].to(device).float() >= 0.5).repeat_interleave(L)
+                S, M = self._refiner_bank_paste(S, M, rows, flip, mem_keep)
+        elif float(self.refiner_erase_prob) > 0.0:
+            static = batch.get("win_static")
+            if static is None:
+                raise KeyError("refiner_erase_prob needs win_static in the window batch")
+            static = static.to(device).float().repeat_interleave(L, dim=0)
+            S = self._refiner_erase_cracks(S, M, stackT(F_list), static, mem_keep)
+        S = self._refiner_state_condition(S)
+        s_cond = self._refiner_conf_hint(torch.cat([S, M], dim=1), stackT(conf_list), hops=stackT(hop_list))
+        loss = self._refiner_cfm_core(x1, s_cond, c_t, g_t, stackT(w_list), m_t, dg_t)
+        self._last_refiner_resample_t = t_s
+        self._last_refiner_resample_frac = float(rs.float().mean())
+        self._last_window_hops = float(torch.stack(hop_list).float().mean())
+        self._last_false_mem_frac = n_false / max(n_hist, 1.0)
+        return loss
+
     def refiner_implicit_flow_matching_loss(
         self,
         z_target,
@@ -375,9 +1016,17 @@ class CFMLossMixin:
         b = z_target.shape[0]
         device = z_target.device
         dtype = z_target.dtype
-        has_prev, s_in = self._refiner_state_track(ar_pack, info, mask_combined, b, device, dtype)
         hs1 = ar_pack["hidden_state_prev"]
-        s_cond = self._refiner_state_condition(s_in)
+        if self.refiner_neighbors:
+            has_prev = torch.ones(b, dtype=torch.bool, device=device)
+            s_cond = None
+        else:
+            has_prev, s_in = self._refiner_state_track(ar_pack, info, mask_combined, b, device, dtype)
+            s_cond = self._refiner_state_condition(s_in)
+            if self.refiner_memory:
+                hint = self._refiner_learned_memory_hint if self.refiner_memory_encoder else self._refiner_memory_hint
+                s_cond = torch.cat([s_cond, hint(ar_pack, b, device, dtype)], dim=1)
+            s_cond = self._refiner_conf_hint(s_cond, self._refiner_state_conf_rows)
 
         control_scale = None
         weight = has_prev.to(dtype)
@@ -391,6 +1040,8 @@ class CFMLossMixin:
 
         z0 = torch.randn_like(z_target)
         t = torch.rand(b, device=device, dtype=dtype).clamp(min=1e-5, max=1.0 - 1e-5)
+        if self.refiner_neighbors:
+            s_cond = self._refiner_neighbor_hint(ar_pack, z0, t)
         coords = None
         x1 = z_target
         if self.use_patch_diffusion:
@@ -409,6 +1060,11 @@ class CFMLossMixin:
         dg_target = None
         if self.use_delta_g:
             dg_target = gru_feat_target - self.process_physics_condition(hs1)
+        dg_next = None
+        if self.refiner_nbr_delta_g:
+            dg_next = self.process_physics_condition(ar_pack["hidden_state_next"]) - gru_feat_target
+        if self.refiner_memory:
+            s_cond = self._refiner_memory_time_gate(s_cond, t)
         v_pred = self._predict_velocity(
             zt,
             t,
@@ -419,12 +1075,15 @@ class CFMLossMixin:
             lr_cond=s_cond,
             gru_delta=dg_target,
             control_scale=control_scale,
+            gru_delta_next=dg_next,
         )
         per_sample_loss = self._cfm_mse(v_pred, target_u, valid_mask=valid_mask)
         if self.use_velocity_min_snr_weighting:
             per_sample_loss = per_sample_loss * self._compute_velocity_min_snr_weight(t).to(
                 per_sample_loss.dtype
             )
+        if self._refiner_memory_recycle_on():
+            self._refiner_memory_bank(ar_pack, zt.detach(), t, v_pred.detach(), x1)
         denom = weight.sum().clamp_min(1.0)
         loss = (per_sample_loss * weight).sum() / denom
         self._last_fm_loss = float(loss.detach())
@@ -438,6 +1097,10 @@ class CFMLossMixin:
             tone = (diff.mean(dim=(1, 2, 3)) * t * weight).sum() / denom
             self._last_refiner_tone_loss = float(tone.detach())
             loss = loss + tone_w * tone
+        aux = getattr(self, "_refiner_memory_aux_term", None)  # already weighted (decoder loss + sparsity)
+        if aux is not None:
+            loss = loss + aux
+            self._refiner_memory_aux_term = None
         return loss
 
 

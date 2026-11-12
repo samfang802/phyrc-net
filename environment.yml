@@ -225,4 +225,3 @@ dependencies:
       - ultralytics-thop==2.0.0
       - wandb==0.16.3
       - webencodings==0.5.1
-prefix: /Data/home/tingyan/.conda/envs/hysteresis

@@ -193,6 +193,17 @@ if [[ "${APP_CODE_DIM}" != "0" ]]; then
     APP_ARGS=(--app_code_dim "${APP_CODE_DIM}" --app_drop_prob "${APP_DROP_PROB:-0.2}" --app_noise_std "${APP_NOISE_STD:-0.05}" --app_mix_prob "${APP_MIX_PROB:-0.0}")
     echo "[train_ADMCFM] APP_CODE_DIM=${APP_CODE_DIM} drop=${APP_DROP_PROB:-0.2} noise=${APP_NOISE_STD:-0.05} mix=${APP_MIX_PROB:-0.0}"
 fi
+# Layout channel (v12; docs/redesign/phase1_fiber_clock.md): the frame's AnyLabel spall layout (truncated SDF)
+# as one more U-Net input channel. From scratch, LAYOUT_ZERO_INIT=False keeps the default init. Unset = off.
+LAYOUT_COND="${LAYOUT_COND:-False}"
+LAYOUT_ARGS=()
+if [[ "${LAYOUT_COND}" == "True" ]]; then
+    LAYOUT_ARGS=(--layout_cond True --layout_zero_init "${LAYOUT_ZERO_INIT:-False}" --layout_drop_prob "${LAYOUT_DROP_PROB:-0.1}" \
+                 --layout_cache "${LAYOUT_CACHE:-Data/DamagePattern/anylabel_layout_sdf128.npz}")
+    echo "[train_ADMCFM] layout_cond: ${LAYOUT_ARGS[*]}"
+fi
+# Periodic val KID (src/metrics/train_kid.py), logged to <run>/kid_log.jsonl. 0 = off (default, as before).
+KID_ARGS=(--kid_every_n_steps "${KID_EVERY_N_STEPS:-0}" --kid_k "${KID_K:-8}")
 RESUME_CKPT="${RESUME_CKPT:-none}"
 [[ "${RESUME_CKPT}" == "none" ]] && RESUME_CKPT=""   # RESUME_CKPT=none: start from scratch
 if [[ -n "${RESUME_CKPT}" ]]; then
@@ -260,6 +271,8 @@ fi
         "${RESUME_ARGS[@]}" \
         "${V11_ARGS[@]}" \
         "${APP_ARGS[@]}" \
+        "${LAYOUT_ARGS[@]}" \
+        "${KID_ARGS[@]}" \
         --img_aug \
         --use_grayscale_input "${USE_GRAYSCALE_INPUT}" \
         --use_clahe "${USE_CLAHE}" --clahe_clip_limit "${CLAHE_CLIP_LIMIT}" \

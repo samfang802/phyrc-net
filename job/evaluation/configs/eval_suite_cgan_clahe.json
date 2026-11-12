@@ -1,0 +1,18 @@
+{
+  "out_dir": "results/eval_suite/cgan_clahe",
+  "splits": ["test"],
+  "k": 8,
+  "baseline": "base",
+  "dino_model": "facebook/dinov3-vits16-pretrain-lvd1689m",
+  "extra_dino_models": [],
+  "remove_interference": false,
+  "models": [
+    {"name": "V106C", "npz": {"test": "results/eval_suite/v106C/test/samples/v106C_6k.npz"}, "jpeg_quality": 75},
+    {"name": "refiner", "npz": {"test": "results/eval_suite/v105/test/samples/refiner.npz"}, "jpeg_quality": 75},
+    {"name": "base", "npz": {"test": "results/eval_suite/v105/test/samples/gn.npz"}, "jpeg_quality": 75},
+    {"name": "v11app", "npz": {"test": "results/eval_suite/v11_fog/test/samples/app_mean.npz"}, "jpeg_quality": 75},
+    {"name": "v11appr", "npz": {"test": "results/eval_suite/v11app_refiner/test/samples/app_r_6k.npz"}, "jpeg_quality": 75},
+    {"name": "v12gtr_grav", "npz": {"test": "results/eval_suite/v12gtrefiner/test/samples/v12gtrefiner_006000_grav.npz"}, "jpeg_quality": 75},
+    {"name": "cGAN", "npz": {"test": "results/eval_suite/cgan_clahe/test/samples/cGAN_clahe_eq.npz"}, "jpeg_quality": 75}
+  ]
+}

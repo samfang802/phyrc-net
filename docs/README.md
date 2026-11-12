@@ -13,6 +13,7 @@
 | [`ARCHITECTURE_UPDATE_V10_5.md`](ARCHITECTURE_UPDATE_V10_5.md) | refiner 改成 ControlNet 分支的隱式殘差，加曝光修正 |
 | [`ARCHITECTURE_UPDATE_V10_6.md`](ARCHITECTURE_UPDATE_V10_6.md) | 回到串接 `S_{t-1}` 的 refiner，目標改成 x1，保留 v10.5 的曝光修正 |
 | [`ARCHITECTURE_UPDATE_V11.md`](ARCHITECTURE_UPDATE_V11.md) | gn 的條件換成損傷狀態編碼器（z + 損傷標量 + 加載正負號） |
+| [`RFMV2_ARCHITECTURE.md`](RFMV2_ARCHITECTURE.md) | rfmv2：視窗式自回歸重畫、由重畫幀寫入的規則記憶、假記憶遮罩、雙通道可信度；訓練與推論流程 |
 
 V2–V8 和更早的方法筆記在 [`archive/`](archive/)，預設搜尋不會讀它們。
 
@@ -40,5 +41,5 @@ V10 的 refiner 之前的時序設計，依時間順序：
 
 | 資料夾 | 內容 |
 |---|---|
-| [`eval/`](eval/README.md) | 生成品質評估：DINOv3 KID、條件指標、損傷型態、干擾物處理、目前結果與參考文獻 |
+| [`eval/`](eval/README.md) | 生成品質評估：定案指標（`metrics.md`）、各版本結果（`results.md`）；設計過程在 `eval/archive/` |
 | [`figures/`](figures/) | 文件用的流程圖 |

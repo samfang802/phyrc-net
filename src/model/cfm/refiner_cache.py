@@ -21,8 +21,11 @@ CACHE_DIR = os.path.join("results", "DamagePatternGeneration", "state_cache")
 def _cache_path(model, dataset, n):
     base_ckpt = os.path.abspath(str(model.refiner_base_checkpoint))
     frames = "\n".join(sorted(dataset.label["filename"].tolist()))
-    key = hashlib.md5(f"{base_ckpt}\n{frames}".encode()).hexdigest()[:12]
     base = model._refiner_base_ref[0]
+    layout_src = ""
+    if getattr(base, "layout_cond", False):
+        layout_src = "\nlayout:" + os.path.abspath(str(getattr(dataset, "layout_cache_path", "")))
+    key = hashlib.md5(f"{base_ckpt}\n{frames}{layout_src}".encode()).hexdigest()[:12]
     name = (
         f"{dataset.mode}_n{int(n)}_{base.cfm_solver}{int(base.cfm_ode_steps)}_"
         f"s{int(dataset.image_size)}_{key}.pt"
@@ -65,12 +68,36 @@ def _build(model, dataset, n, device, rows_per_batch):
         info, hs, dr, di, mask = (t.to(device) for t in _frame_conditions(dataset, rows))
         rep = lambda x: x.repeat_interleave(int(n), dim=0)
         c, g = base._unpack_conditions(rep(info), rep(hs), rep(dr), rep(di))
-        x = base.sample_with_ode(c, gru_feat=g, damage_mask=rep(mask))
+        mask = rep(mask)
+        if getattr(base, "layout_cond", False):
+            # Layout-aware base (v12): sample j of a frame reads layout j % K of the dataset's layout cache
+            # (no dropout, no flip; the state is flipped with the training sample later). Missing -> 0.
+            mask = torch.cat([mask, _frame_layouts(dataset, rows, int(n), mask.shape[-1]).to(device)], dim=1)
+        x = base.sample_with_ode(c, gru_feat=g, damage_mask=mask)
         x = x.mean(dim=1, keepdim=True).to(torch.float16).cpu()
         for j, name in enumerate(rows["filename"].tolist()):
             states[name] = x[j * int(n) : (j + 1) * int(n)].clone()
         print(f"[state_cache] {min(start + rows_per_batch, len(label))}/{len(label)} frames", flush=True)
     return states
+
+
+def _frame_layouts(dataset, rows, n, size):
+    import numpy as np
+    import torch.nn.functional as F
+
+    out = []
+    for f in rows["filename"].tolist():
+        sdf = dataset._layout.get(str(f)) if getattr(dataset, "_layout", None) is not None else None
+        if sdf is None:
+            out.append(torch.zeros(n, 1, size, size))
+            continue
+        sdf = np.asarray(sdf, dtype=np.float32)
+        sdf = sdf[None] if sdf.ndim == 2 else sdf
+        x = torch.from_numpy(sdf[[j % sdf.shape[0] for j in range(n)]])[:, None]
+        if x.shape[-1] != size:
+            x = F.interpolate(x, size=(size, size), mode="bilinear", align_corners=False)
+        out.append(x)
+    return torch.cat(out, dim=0)
 
 
 def load_or_build_state_cache(model, dataset, n, device, rows_per_batch=64):
